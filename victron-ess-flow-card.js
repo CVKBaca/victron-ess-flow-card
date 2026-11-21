@@ -3,7 +3,7 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.2.0';
+  const VERSION = '0.2.1';
   const TAG = 'victron-ess-flow-card';
 
   const I18N = {
@@ -131,7 +131,7 @@
       const ents = [...list(c.grid.power), ...list(c.loads.power), c.inverter.state, ...list(c.inverter.power),
         c.inverter.dc_power, c.inverter.mode];
       if (c.battery) ents.push(...list(c.battery.power), c.battery.soc, c.battery.voltage, c.battery.current, c.battery.state);
-      [...c.dc_sources, ...c.ac_sources].forEach((s) => ents.push(...list(s.power), s.today));
+      [...c.dc_sources, ...c.ac_sources].forEach((s) => ents.push(...list(s.power), s.today, ...list(s.voltage), ...list(s.current)));
       list(c.loads.details).forEach((d) => ents.push(...list(d.power)));
       ents.push(c.loads.today);
       c.consumers.forEach((x) => ents.push(...list(x.power), x.today, ...list(x.extra).map((e) => e.entity)));
@@ -227,12 +227,28 @@
       const srcBox = (arr, key, label) => {
         if (!arr.length) return NaN;
         let tot = 0, ok = false;
-        const lines = arr.map((s) => {
+        // PV voltage (list = average, e.g. strings) and current (list = sum)
+        const va = (s) => {
+          const out = [];
+          const vs = list(s.voltage).map((e) => this._num(e)).filter((v) => !Number.isNaN(v));
+          if (list(s.voltage).length) out.push(`${this._f(vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : NaN, 1)} V`);
+          if (list(s.current).length) out.push(`${this._f(this._sum(s.current), 1)} A`);
+          return out;
+        };
+        let lines;
+        if (arr.length === 1) {
+          // one source: the power is the big value -> line 1 = name · V · A, line 2 = today
+          const s = arr[0];
           const p = this._sum(s.power); if (!Number.isNaN(p)) { tot += p; ok = true; }
-          const today = s.today ? `${this._f(this._num(s.today), 2)} kWh` : '';
-          if (arr.length === 1 && !s.name) return today ? `${t.today} ${today}` : '';
-          return `${s.name ? s.name + ' ' : ''}${this._W(p)}${today ? ' · ' + today : ''}`;
-        }).filter(Boolean);
+          lines = [[s.name, ...va(s)].filter(Boolean).join(' · '),
+            s.today ? `${t.today} ${this._f(this._num(s.today), 2)} kWh` : ''].filter(Boolean);
+        } else {
+          lines = arr.map((s) => {
+            const p = this._sum(s.power); if (!Number.isNaN(p)) { tot += p; ok = true; }
+            const today = s.today ? `${this._f(this._num(s.today), 2)} kWh` : '';
+            return `${s.name ? s.name + ' ' : ''}${this._W(p)}${today ? ' · ' + today : ''}`;
+          });
+        }
         const total = ok ? tot : NaN;
         B[key] = { label, color: C[key], value: this._num0(total), unit: 'W', valueColor: C[key], lines, e: list(arr[0].power)[0] };
         return total;

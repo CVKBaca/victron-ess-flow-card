@@ -82,10 +82,14 @@ dc_sources:
   - name: Roof
     power: sensor.mppt_pv_power
     today: sensor.mppt_yield_today
+    voltage: sensor.mppt_pv_voltage
+    current: sensor.mppt_pv_current
 ac_sources:
   - name: Garage
     power: sensor.pv_inverter_power
     today: sensor.pv_inverter_yield_today
+    voltage: [sensor.pv_inverter_string1_voltage, sensor.pv_inverter_string2_voltage]
+    current: [sensor.pv_inverter_string1_current, sensor.pv_inverter_string2_current]
 dc_label: Solar DC
 ac_label: Solar AC
 ```
@@ -133,8 +137,10 @@ Common options for `grid`, `inverter`, `loads` and `battery`:
 | | `state` | – | Entity shown instead of Charging / Discharging |
 
 `dc_sources` and `ac_sources` are lists of PV sources. Each item is an entity id or
-`{name, power, today}` (`power` may be a list, `today` is the daily yield in kWh).
-Sources are summed in one box; each source gets its own line.
+`{name, power, today, voltage, current}` (`power` may be a list, `today` is the daily yield in kWh,
+`voltage` / `current` are PV values: a list of strings is averaged / summed).
+Sources are summed in one box. With one source the power is the big value and the box shows
+`name · V · A` and `Today … kWh`; with more sources each source gets its own line (`name power · today`).
 
 `loads.consumers` is a list of boxes fed from the AC loads (e.g. EV charger, house). Each item:
 `name`, `power` (entity or list), `today` (kWh), `color`, `extra`, `tap_entity`.

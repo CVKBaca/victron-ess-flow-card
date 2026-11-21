@@ -3,7 +3,9 @@
 Animated energy-flow card for Home Assistant, made for Victron ESS systems
 (MultiPlus / Quattro with a battery, MPPT chargers and AC-coupled PV inverters).
 
-![Victron ESS Flow Card](images/screenshot.png)
+<img src="images/screenshot.png" alt="Compact view" width="360"> <img src="images/screenshot-detail.png" alt="Detailed view" width="360">
+
+*Compact view with today's graphs and the footer · detailed view (sample data)*
 
 The diagram follows how such a system is actually wired:
 

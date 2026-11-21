@@ -3,21 +3,25 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.2.1';
+  const VERSION = '0.3.0';
   const TAG = 'victron-ess-flow-card';
+  const LS_KEY = `${TAG}:view`; // view chosen with the toggle, remembered per device (browser)
 
   const I18N = {
     en: {
       grid: 'Grid', inverter: 'Inverter', loads: 'AC loads', battery: 'Battery', dc: 'Solar DC', ac: 'Solar AC',
       import: 'Import', export: 'Export', idle: 'Idle', output: 'Output', charging: 'Charging',
-      discharging: 'Discharging', today: 'Today',
+      discharging: 'Discharging', today: 'Today', position: 'Position', voltage: 'Voltage', current: 'Current', detail: 'Detailed view', compact: 'Compact view',
     },
     sk: {
       grid: 'Sieť', inverter: 'Menič', loads: 'Spotreba', battery: 'Batéria', dc: 'FV – DC', ac: 'FV – AC',
       import: 'Odber', export: 'Dodávka', idle: 'Bez toku', output: 'Výstup', charging: 'Nabíja',
-      discharging: 'Vybíja', today: 'Dnes',
+      discharging: 'Vybíja', today: 'Dnes', position: 'Pozícia', voltage: 'Napätie', current: 'Prúd', detail: 'Detailné zobrazenie', compact: 'Kompaktné zobrazenie',
     },
   };
+  // mdi:unfold-more-horizontal / mdi:unfold-less-horizontal
+  const ICON_MORE = 'M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z';
+  const ICON_LESS = 'M16.59,5.41L15.17,4L12,7.17L8.83,4L7.41,5.41L12,10M7.41,18.59L8.83,20L12,16.83L15.17,20L16.58,18.59L12,14L7.41,18.59Z';
 
   // VE.Bus states (Victron /VebusState, Modbus vebus 31 / system 844): raw code or English text -> translated text
   const VEBUS = {
@@ -39,7 +43,7 @@
 
   const COLORS = {
     grid: '#9FB3C8', import: '#E07A5F', export: '#9FB3C8', inverter: '#387DC5', loads: '#4AB9C1',
-    battery: '#5DBE6E', dc: '#F7AB3E', ac: '#FDD835',
+    battery: '#5DBE6E', dc: '#F7AB3E', ac: '#FDD835', header: '#387DC5',
   };
 
   // portrait = phones / narrow columns, landscape = wide cards
@@ -61,11 +65,17 @@
 
   const list = (v) => (v == null || v === '' ? [] : Array.isArray(v) ? v : [v]);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const boxH = (n) => (n ? 92 + 16 * (n - 1) : 70);
+  // box content: lines (string, 16 px) and tables ({head, rows}, detailed view, TR px per row incl. the header)
+  const TR = 14;
+  const itemH = (it) => (typeof it === 'string' ? 16 : TR * (it.rows.length + 1) + 2);
+  const boxH = (items) => (items.length ? 76 + items.reduce((s, it) => s + itemH(it), 0) : 70);
   const HDR_H = 22; // header bar height (header_style: bar)
 
   // readable text color (dark or white) for a header bar of the given color
-  const onColor = (col) => {
+  // maxL: luminance above which dark text is used (default: the one with better contrast)
+  // TEXT_L: header texts are white unless the color is light (strict contrast picks black on mid blues / purples)
+  const TEXT_L = 0.3;
+  const onColor = (col, maxL) => {
     const s = String(col).trim();
     let rgb = null;
     let m = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
@@ -75,16 +85,26 @@
     } else if ((m = s.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i))) {
       rgb = [m[1], m[2], m[3]].map(Number);
     }
-    if (!rgb) return 'rgba(0,0,0,.87)';
+    if (!rgb) return maxL != null ? '#fff' : 'rgba(0,0,0,.87)';
     const [r, g, b] = rgb.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
     const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if (maxL != null) return L > maxL ? 'rgba(0,0,0,.87)' : '#fff';
     return (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? 'rgba(0,0,0,.87)' : '#fff';
   };
 
   const STYLE = `
     :host { display: block; }
     ha-card { padding: 12px; overflow: hidden; }
-    .title { font-size: 16px; font-weight: 500; color: var(--primary-text-color); padding: 0 4px 10px; }
+    /* card header in the style of the box headers: colored bar (header_style: bar) or stripe on the left */
+    .hdr { display: flex; align-items: center; gap: 8px; height: 34px; margin: -12px -12px 12px; padding: 0 6px 0 16px;
+      background: var(--vefc-hdr); color: var(--vefc-hdr-text); }
+    .hdr.stripe { background: none; color: var(--secondary-text-color); box-shadow: inset 4px 0 0 var(--vefc-hdr); }
+    .title { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tg { flex: none; display: flex; padding: 3px; border: 0; border-radius: 50%; background: none; cursor: pointer;
+      color: inherit; }
+    .tg:hover { background: rgba(127,127,127,.2); }
+    .tg svg { width: 22px; height: 22px; fill: currentColor; }
     svg { display: block; width: 100%; height: auto; overflow: visible;
       font-family: var(--ha-font-family-body, var(--paper-font-body1_-_font-family, Roboto, sans-serif)); }
     .bg { fill: var(--secondary-background-color, #282828); cursor: pointer; }
@@ -93,6 +113,8 @@
     .val.small { font-size: 20px; }
     .u { font-size: 13px; font-weight: 500; fill-opacity: .7; }
     .sub { fill: var(--secondary-text-color); font-size: 12px; }
+    .th { fill: var(--secondary-text-color); font-size: 11px; }
+    .tc { fill: var(--primary-text-color); font-size: 11px; font-variant-numeric: tabular-nums; }
     .ln { fill: none; stroke: var(--divider-color, rgba(127,127,127,.25)); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
     .la { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity .4s; }
     .la.on { opacity: .35; }
@@ -109,7 +131,7 @@
 
     static getStubConfig() {
       return {
-        grid: { power: 'sensor.grid_power' },
+        grid: { power: 'sensor.grid_net_power' },
         inverter: { state: 'sensor.vebus_state' },
         loads: { power: 'sensor.ac_loads_power' },
         battery: { power: 'sensor.battery_power', soc: 'sensor.battery_soc' },
@@ -136,6 +158,14 @@
       ents.push(c.loads.today);
       c.consumers.forEach((x) => ents.push(...list(x.power), x.today, ...list(x.extra).map((e) => e.entity)));
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => c[k] && list(c[k].extra).forEach((x) => ents.push(x.entity)));
+      // detailed view: phase values, PV strings, detail-only lines
+      const more = (o) => {
+        if (!o) return;
+        ents.push(...list(o.voltage), ...list(o.current), ...list(o.phase_power), ...list(o.detail).map((x) => x && x.entity));
+        list(o.strings).forEach((s) => s && ents.push(...list(s.power), ...list(s.voltage), ...list(s.current)));
+      };
+      ['grid', 'inverter', 'loads', 'battery'].forEach((k) => more(c[k]));
+      [...c.dc_sources, ...c.ac_sources, ...c.consumers].forEach(more);
       this._ents = [...new Set(ents.filter(Boolean))];
       this._key = null;
       this._sig = null;
@@ -199,6 +229,67 @@
       const u = x.unit != null ? x.unit : (s.attributes.unit_of_measurement || '');
       return `${x.name ? x.name + ': ' : ''}${s.state}${u ? ' ' + u : ''}`;
     }
+    // detail-only line: "name: value" (value formatted by HA: locale, display precision, translated states)
+    _detailRow(x) {
+      if (!x || !x.entity) return '';
+      const s = this._so(x.entity);
+      let v = '–';
+      if (s) {
+        if (x.unit != null) v = `${s.state}${x.unit ? ' ' + x.unit : ''}`;
+        else {
+          try { if (this._hass.formatEntityState) v = this._hass.formatEntityState(s) || '–'; } catch (err) { v = '–'; }
+          if (v === '–') v = `${s.state}${s.attributes.unit_of_measurement ? ' ' + s.attributes.unit_of_measurement : ''}`;
+        }
+      }
+      const name = x.name != null ? x.name : s && s.attributes.friendly_name;
+      return name ? `${name}: ${v}` : v;
+    }
+    _detailRows(o) { return o ? list(o.detail).map((x) => this._detailRow(x)).filter(Boolean) : []; }
+
+    // detail table: rows [{label, v, a, p}] of entity ids; only configured columns (V, A, W)
+    _table(rows, sign = 1) {
+      const cols = ['v', 'a', 'p'].filter((k) => rows.some((r) => r[k]));
+      if (!rows.length || !cols.length) return null;
+      const fmt = (k, e) => {
+        if (!e) return '–';
+        if (k === 'p') return this._num0(this._pw(e) * sign);
+        const v = this._num(e);
+        return this._f(v, k === 'a' || Math.abs(v) < 100 ? 1 : 0);
+      };
+      return { head: cols.map((k) => ({ v: 'V', a: 'A', p: 'W' }[k])),
+        rows: rows.map((r) => [r.label, ...cols.map((k) => fmt(k, r[k]))]) };
+    }
+    // phases L1..Ln from lists: phase_power (or power, if it is a list), voltage, current
+    _phaseTable(o, sign = 1) {
+      if (!o) return null;
+      const P = list(o.phase_power).length ? list(o.phase_power) : list(o.power).length > 1 ? list(o.power) : [];
+      const V = list(o.voltage), A = list(o.current);
+      const n = Math.max(P.length, V.length, A.length);
+      if (n < 2) return null;
+      return this._table(Array.from({ length: n }, (_, i) => ({ label: `L${i + 1}`, v: V[i], a: A[i], p: P[i] })), sign);
+    }
+    // PV strings: [{name, voltage, current, power}]
+    _stringTable(s) {
+      const st = list(s.strings).filter(Boolean);
+      return st.length ? this._table(st.map((x, i) => ({ label: x.name || `S${i + 1}`,
+        v: list(x.voltage)[0], a: list(x.current)[0], p: list(x.power)[0] }))) : null;
+    }
+
+    // view: compact | detail; the toggle choice (localStorage) wins over `view`
+    _getView() {
+      const c = this._cfg;
+      if (c.view_toggle !== false) {
+        if (this._viewSet) return this._viewSet;
+        try { const v = window.localStorage.getItem(LS_KEY); if (v === 'compact' || v === 'detail') return v; } catch (e) { /* no storage */ }
+      }
+      return c.view === 'detail' ? 'detail' : 'compact';
+    }
+    _setView(v) {
+      this._viewSet = v;
+      try { window.localStorage.setItem(LS_KEY, v); } catch (e) { /* no storage */ }
+      this._render(true);
+    }
+
     _mode() {
       const l = this._cfg.layout;
       if (l === 'portrait' || l === 'landscape') return l;
@@ -209,16 +300,24 @@
     // ---------------------------------------------------------------- model
     _model() {
       const c = this._cfg, t = this._t, C = c.colors, min = c.min_flow;
+      const D = this._view === 'detail';
       const inv = (o) => (o && o.invert ? -1 : 1);
       const B = {}, F = {};
       const tap = (o, fallback) => (o && o.tap_entity) || fallback;
+      // detailed view: phase table instead of the "L1 · L2 · L3 W" line
+      const phases = (arr, o, sign = 1) => {
+        const tb = D ? this._phaseTable(o, sign) : null;
+        if (tb) { arr.push(tb); return; }
+        const p = this._phases(o.power); if (p) arr.push(p);
+      };
 
       // grid (+ = import)
       const grid = this._sum(c.grid.power) * inv(c.grid);
       const idleG = Number.isNaN(grid) || Math.abs(grid) < min;
       const gl = [Number.isNaN(grid) ? '–' : idleG ? t.idle : grid > 0 ? t.import : t.export];
-      const gp = this._phases(c.grid.power); if (gp) gl.push(gp);
+      phases(gl, c.grid, inv(c.grid));
       list(c.grid.extra).forEach((x) => gl.push(this._extra(x)));
+      if (D) gl.push(...this._detailRows(c.grid));
       B.grid = { label: c.grid.name || t.grid, color: C.grid, value: this._num0(Math.abs(grid)), unit: 'W',
         valueColor: idleG ? null : grid > 0 ? C.import : C.export, lines: gl, e: tap(c.grid, list(c.grid.power)[0]) };
       F.grid = grid;
@@ -240,13 +339,24 @@
           // one source: the power is the big value -> line 1 = name · V · A, line 2 = today
           const s = arr[0];
           const p = this._sum(s.power); if (!Number.isNaN(p)) { tot += p; ok = true; }
-          lines = [[s.name, ...va(s)].filter(Boolean).join(' · '),
-            s.today ? `${t.today} ${this._f(this._num(s.today), 2)} kWh` : ''].filter(Boolean);
+          const today = s.today ? `${t.today} ${this._f(this._num(s.today), 2)} kWh` : '';
+          if (D) {
+            // detailed view: one value per line (Position: name, Voltage, Current, Today), then strings and detail rows
+            const [v, a] = [list(s.voltage).length ? va({ voltage: s.voltage })[0] : '', list(s.current).length ? va({ current: s.current })[0] : ''];
+            lines = [s.name ? `${t.position}: ${s.name}` : '', v ? `${t.voltage}: ${v}` : '', a ? `${t.current}: ${a}` : '', today]
+              .filter(Boolean);
+            const stb = this._stringTable(s); if (stb) lines.push(stb);
+            lines.push(...this._detailRows(s));
+          } else {
+            lines = [[s.name, ...va(s)].filter(Boolean).join(' · '), today].filter(Boolean);
+          }
         } else {
-          lines = arr.map((s) => {
+          lines = arr.flatMap((s) => {
             const p = this._sum(s.power); if (!Number.isNaN(p)) { tot += p; ok = true; }
             const today = s.today ? `${this._f(this._num(s.today), 2)} kWh` : '';
-            return `${s.name ? s.name + ' ' : ''}${this._W(p)}${today ? ' · ' + today : ''}`;
+            const out = [`${s.name ? s.name + ' ' : ''}${this._W(p)}${today ? ' · ' + today : ''}`];
+            if (D) { const stb = this._stringTable(s); if (stb) out.push(stb); out.push(...this._detailRows(s)); }
+            return out;
           });
         }
         const total = ok ? tot : NaN;
@@ -260,11 +370,12 @@
       // AC loads (+ = consumption)
       const load = this._sum(c.loads.power) * inv(c.loads);
       const ll = [];
-      const lp = this._phases(c.loads.power); if (lp) ll.push(lp);
+      phases(ll, c.loads, inv(c.loads));
       const loadToday = c.loads.today ? this._num(c.loads.today) : NaN;
       if (c.loads.today) ll.push(`${t.today} ${this._f(loadToday, 2)} kWh`);
       list(c.loads.details).forEach((d) => ll.push(`${d.name || d.power} ${this._W(this._sum(d.power))}`));
       list(c.loads.extra).forEach((x) => ll.push(this._extra(x)));
+      if (D) ll.push(...this._detailRows(c.loads));
       B.loads = { label: c.loads.name || t.loads, color: C.loads, value: this._num0(load), unit: 'W', lines: ll,
         e: tap(c.loads, list(c.loads.power)[0]) };
 
@@ -287,8 +398,12 @@
         const cl = [];
         if (x.today || (!list(x.power).length && c.loads.today)) cl.push(`${t.today} ${this._f(today, 2)} kWh`);
         list(x.extra).forEach((e) => cl.push(this._extra(e)));
+        if (D) {
+          const tb = this._phaseTable(x); if (tb) cl.push(tb);
+          cl.push(...this._detailRows(x));
+        }
         const k = 'c' + j;
-        B[k] = { label: x.name || `${t.loads} ${j + 1}`, color: x.color || C.loads, value: this._num0(p), unit: 'W',
+        B[k] = { label: x.name || `${t.loads} ${j + 1}`, color: x.color || C.loads, textColor: x.text_color, value: this._num0(p), unit: 'W',
           lines: cl, cons: true, e: tap(x, list(x.power)[0] || list(c.loads.power)[0]) };
         F[k] = p;
       });
@@ -306,6 +421,7 @@
           : Number.isNaN(bat) ? '–' : Math.abs(bat) < min ? t.idle : bat > 0 ? t.charging : t.discharging;
         const bl = [parts.join(' · '), state];
         list(b.extra).forEach((x) => bl.push(this._extra(x)));
+        if (D) bl.push(...this._detailRows(b));
         const sc = Number.isNaN(soc) ? null : soc < 20 ? '#E5484D' : soc < 50 ? '#F7AB3E' : C.battery;
         B.battery = { label: b.name || t.battery, color: C.battery, value: this._num0(soc), unit: '%', valueColor: sc,
           lines: bl, e: tap(b, b.soc || list(b.power)[0]) };
@@ -319,7 +435,13 @@
       const il = [];
       if (outIds.length) il.push(`${t.output} ${this._W(out)}`);
       if (i.mode) il.push(String(this._stateText(i.mode) ?? '–'));
+      if (D) {
+        // output phases (power list + voltage / current) and the DC side
+        const tb = this._phaseTable(i); if (tb) il.push(tb);
+        if (i.dc_power) il.push(`DC ${this._W(this._pw(i.dc_power) * (i.invert_dc ? -1 : 1))}`);
+      }
       list(i.extra).forEach((x) => il.push(this._extra(x)));
+      if (D) il.push(...this._detailRows(i));
       B.inverter = { label: i.name || t.inverter, color: C.inverter, value: st != null ? esc(st) : this._num0(out),
         unit: st != null ? '' : 'W', lines: il, e: tap(i, i.state || outIds[0]) };
       F.out = out;
@@ -338,7 +460,7 @@
       P.rows.forEach((row) => {
         const keys = row.filter((k) => B[k]);
         if (!keys.length) return;
-        const h = Math.max(...keys.map((k) => boxH(B[k].lines.length)));
+        const h = Math.max(...keys.map((k) => boxH(B[k].lines)));
         row.forEach((k, idx) => { if (B[k]) pos[k] = { x: P.cols[idx], y, w: P.bw, h }; });
         y += h + P.gap;
         // portrait: consumers side by side under the loads box, from the inverter-battery line to the card edge;
@@ -349,7 +471,7 @@
           const w = (P.W - x0 - CONS_GAP * (CONS_PER_ROW - 1)) / CONS_PER_ROW;
           for (let r = 0; r < ck.length; r += CONS_PER_ROW) {
             const rk = ck.slice(r, r + CONS_PER_ROW);
-            const hc = Math.max(...rk.map((k) => boxH(B[k].lines.length)));
+            const hc = Math.max(...rk.map((k) => boxH(B[k].lines)));
             rk.forEach((k, j) => { pos[k] = { x: P.W - (rk.length - j) * (w + CONS_GAP) + CONS_GAP, y, w, h: hc, row: r / CONS_PER_ROW }; });
             y += hc + CONS_GAP;
           }
@@ -361,7 +483,7 @@
       if (mode === 'landscape' && ck.length) {
         let yc = 0;
         ck.forEach((k) => {
-          const hc = boxH(B[k].lines.length);
+          const hc = boxH(B[k].lines);
           pos[k] = { x: P.cols[3], y: yc, w: P.bw, h: hc };
           yc += hc + CONS_GAP;
         });
@@ -458,9 +580,21 @@
             : `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`)
           + `<g data-box="${k}"></g></g>`;
       });
-      const title = this._cfg.title ? `<div class="title">${esc(this._cfg.title)}</div>` : '';
-      this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${title}`
+      // header: title (left) and the view toggle (right)
+      const D = this._view === 'detail', hasTog = this._cfg.view_toggle !== false;
+      const tog = hasTog ? `<button class="tg" title="${esc(D ? this._t.compact : this._t.detail)}" `
+        + `aria-label="${esc(D ? this._t.compact : this._t.detail)}"><svg viewBox="0 0 24 24"><path d="${D ? ICON_LESS : ICON_MORE}"/></svg></button>` : '';
+      // header text: colors.header_text, or white unless the bar is light
+      const hc = this._cfg.colors.header, bar = this._cfg.header_style === 'bar';
+      const ht = this._cfg.colors.header_text || onColor(hc, TEXT_L);
+      const hdr = this._cfg.title || hasTog
+        ? `<div class="hdr${bar ? '' : ' stripe'}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
+          + `<div class="title">${esc(this._cfg.title || '')}</div>${tog}</div>` : '';
+      this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${hdr}`
         + `<svg viewBox="-2 -2 ${L.W + 4} ${L.H + 4}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${lines}${boxes}</svg></ha-card>`;
+      if (hasTog) {
+        this.shadowRoot.querySelector('.tg').addEventListener('click', () => this._setView(D ? 'compact' : 'detail'));
+      }
       this.shadowRoot.querySelector('svg').addEventListener('click', (ev) => {
         const r = ev.composedPath().find((x) => x && x.dataset && x.dataset.e);
         if (!r) return;
@@ -472,11 +606,12 @@
     _render(force) {
       if (!this._cfg || !this._hass) return;
       const mode = this._mode();
-      const sig = mode + '|' + this._ents.map((e) => this._st(e)).join('|') + '|' + this._lang;
+      this._view = this._getView();
+      const sig = mode + '|' + this._view + '|' + this._ents.map((e) => this._st(e)).join('|') + '|' + this._lang;
       if (!force && sig === this._sig) return;
       this._sig = sig;
       const { B, F } = this._model();
-      const key = mode + '|' + Object.keys(B).map((k) => k + B[k].lines.length).join(',');
+      const key = mode + '|' + this._view + '|' + Object.keys(B).map((k) => k + boxH(B[k].lines)).join(',');
       const L = this._layout(mode, B);
       if (key !== this._key) { this._build(L, B); this._key = key; }
       const root = this.shadowRoot;
@@ -488,11 +623,26 @@
         const b = B[k], x = p.x + (bar ? 12 : 16), mx = p.w - (bar ? 22 : 26);
         const vc = b.valueColor ? ` style="fill:${b.valueColor}"` : '';
         const small = b.unit === '' && String(b.value).length > 10 ? ' small' : '';
-        const lc = bar ? ` style="fill:${onColor(b.color)}"` : '';
+        // box title color: configured (colors.<box>_text, consumer text_color), else white / dark by the header color
+        const tc = b.textColor || this._cfg.colors[k + '_text'];
+        const lc = bar || tc ? ` style="fill:${esc(tc || onColor(b.color, TEXT_L))}"` : '';
         let s = `<text class="lbl" x="${x}" y="${p.y + yL}"${lc} data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
         s += `<text class="val${small}" x="${x}" y="${p.y + yV}"${vc} data-max="${mx}">${b.value}`
           + (b.unit ? `<tspan class="u" dx="4">${b.unit}</tspan>` : '') + '</text>';
-        b.lines.forEach((ln, i) => { s += `<text class="sub" x="${x}" y="${p.y + yS + 16 * i}" data-max="${mx}">${esc(ln)}</text>`; });
+        let off = 0;
+        b.lines.forEach((ln) => {
+          const y = p.y + yS + off;
+          off += itemH(ln);
+          if (typeof ln === 'string') { s += `<text class="sub" x="${x}" y="${y}" data-max="${mx}">${esc(ln)}</text>`; return; }
+          // table: units in the header, values right-aligned in columns after the row label
+          const lw = 24, cx = (i) => (x + lw + (mx - lw) * (i + 1) / ln.head.length).toFixed(1);
+          ln.head.forEach((h, i) => { s += `<text class="th" x="${cx(i)}" y="${y}" text-anchor="end">${esc(h)}</text>`; });
+          ln.rows.forEach((r, j) => {
+            const ry = y + TR * (j + 1);
+            s += `<text class="th" x="${x}" y="${ry}">${esc(r[0])}</text>`;
+            r.slice(1).forEach((v, i) => { s += `<text class="tc" x="${cx(i)}" y="${ry}" text-anchor="end">${esc(v)}</text>`; });
+          });
+        });
         const g = root.querySelector(`[data-box="${k}"]`);
         if (g) g.innerHTML = s;
       });

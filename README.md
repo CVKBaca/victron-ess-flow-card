@@ -18,6 +18,7 @@ Grid ──── Inverter/charger ──── AC loads ──── AC-coupled
 - Colors follow your Home Assistant theme; texts in English or Slovak (by HA language).
 - Every value is a single entity or a list of entities (e.g. three phases), which are summed.
 - Tap a box to open the more-info dialog.
+- Compact or detailed view (per-phase V · A · W tables, PV strings, extra lines), switched by an icon in the card header.
 - Plain JavaScript, no dependencies, no build step.
 
 ## Installation
@@ -38,7 +39,7 @@ Grid ──── Inverter/charger ──── AC loads ──── AC-coupled
 ```yaml
 type: custom:victron-ess-flow-card
 grid:
-  power: sensor.grid_power
+  power: sensor.grid_net_power
 inverter:
   state: sensor.vebus_state
 loads:
@@ -54,7 +55,7 @@ battery:
 type: custom:victron-ess-flow-card
 title: Energy
 grid:
-  power: [sensor.grid_l1_power, sensor.grid_l2_power, sensor.grid_l3_power]
+  power: [sensor.grid_power_l1, sensor.grid_power_l2, sensor.grid_power_l3]
   extra:
     - entity: sensor.electricity_tariff
       name: Tariff
@@ -63,7 +64,7 @@ inverter:
   state: sensor.vebus_state
   power: [sensor.inverter_output_l1_power, sensor.inverter_output_l2_power, sensor.inverter_output_l3_power]
   dc_power: sensor.vebus_dc_power
-  mode: sensor.ess_mode
+  mode: sensor.ess_operating_mode
 loads:
   power: [sensor.ac_loads_l1_power, sensor.ac_loads_l2_power, sensor.ac_loads_l3_power]
   today: sensor.ac_loads_energy_today
@@ -100,13 +101,15 @@ ac_label: Solar AC
 
 | Option | Default | Description |
 |---|---|---|
-| `title` | – | Card title |
+| `title` | – | Card title, shown in the card header (styled like the box headers, `header_style` applies) left of the view toggle |
 | `layout` | `auto` | `auto`, `portrait` or `landscape` |
 | `min_flow` | `10` | Below this power (W) a line is shown as idle |
 | `header_style` | `bar` | `bar` = colored header bar with the box title, `stripe` = colored stripe on the left |
-| `colors` | built-in | Override colors: `grid`, `import`, `export`, `inverter`, `loads`, `battery`, `dc`, `ac` |
+| `colors` | built-in | Override colors: `grid`, `import`, `export`, `inverter`, `loads`, `battery`, `dc`, `ac`, `header` (card header). Title text colors: `header_text`, `grid_text`, `inverter_text`, `loads_text`, `battery_text`, `dc_text`, `ac_text` (default: white, dark on light colors) |
 | `dc_label` | `Solar DC` | Title of the DC-coupled PV box |
 | `ac_label` | `Solar AC` | Title of the AC-coupled PV box |
+| `view` | `compact` | `compact` or `detail` (see [Detailed view](#detailed-view)) |
+| `view_toggle` | `true` | Icon in the card header (right) switching the view; the choice is remembered per device (browser) and wins over `view`. `false` = always `view` |
 
 ### Sections
 
@@ -140,16 +143,63 @@ Common options for `grid`, `inverter`, `loads` and `battery`:
 `{name, power, today, voltage, current}` (`power` may be a list, `today` is the daily yield in kWh,
 `voltage` / `current` are PV values: a list of strings is averaged / summed).
 Sources are summed in one box. With one source the power is the big value and the box shows
-`name · V · A` and `Today … kWh`; with more sources each source gets its own line (`name power · today`).
+`name · V · A` and `Today … kWh` (detailed view: one line each — `Position: name`, `Voltage`, `Current`, `Today`); with more sources each source gets its own line (`name power · today`).
 
 `loads.consumers` is a list of boxes fed from the AC loads (e.g. EV charger, house). Each item:
-`name`, `power` (entity or list), `today` (kWh), `color`, `extra`, `tap_entity`.
+`name`, `power` (entity or list), `today` (kWh), `color`, `text_color` (box title), `extra`, `tap_entity`.
 The first consumer **without `power`** shows the rest: loads − other consumers (and, if it has no `today` but
 `loads.today` is set, loads today − other consumers today).
 Portrait: consumers sit side by side under the AC loads box (two per row); the last one is right under it.
 Landscape: consumers are stacked in a 4th column.
 
 Power entities may be in W or kW (converted by `unit_of_measurement`).
+
+### Detailed view
+
+The detailed view keeps the compact content and adds rows below it (boxes get taller, lines follow).
+All options are optional and are shown only in the detailed view:
+
+| Where | Option | Description |
+|---|---|---|
+| `grid`, `inverter`, `loads`, consumers | `voltage`, `current` | Lists of phase entities → table `L1…Ln` with V · A · W (W from the `power` list) |
+| any section, consumers | `phase_power` | Per-phase power for the table when `power` is a single total entity |
+| PV source | `strings` | List of `{name, voltage, current, power}` → table per string (`S1`, `S2`, … if no name) |
+| everywhere (sections, PV sources, consumers) | `detail` | Extra lines: list of `{entity, name, unit}`; value formatted by HA |
+
+The inverter also shows its `dc_power` as a `DC … W` line.
+
+```yaml
+grid:
+  power: [sensor.grid_power_l1, sensor.grid_power_l2, sensor.grid_power_l3]
+  voltage: [sensor.grid_voltage_l1, sensor.grid_voltage_l2, sensor.grid_voltage_l3]
+  current: [sensor.grid_current_l1, sensor.grid_current_l2, sensor.grid_current_l3]
+  detail:
+    - entity: sensor.grid_meter_frequency
+      name: Frequency
+battery:
+  power: sensor.battery_power
+  soc: sensor.battery_soc
+  detail:
+    - entity: sensor.battery_temperature
+      name: Temperature
+    - entity: sensor.battery_soh
+      name: SoH
+ac_sources:
+  - name: Garage
+    power: sensor.pv_inverter_power
+    strings:
+      - {voltage: sensor.pv_string1_voltage, current: sensor.pv_string1_current, power: sensor.pv_string1_power}
+      - {voltage: sensor.pv_string2_voltage, current: sensor.pv_string2_current, power: sensor.pv_string2_power}
+loads:
+  power: sensor.ac_loads_power
+  consumers:
+    - name: EV charger
+      power: sensor.ev_charger_power
+      phase_power: [sensor.ev_charger_power_l1, sensor.ev_charger_power_l2, sensor.ev_charger_power_l3]
+      detail:
+        - entity: sensor.ev_charger_set_current
+          name: Set
+```
 
 ## Credits
 

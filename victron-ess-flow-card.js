@@ -19,6 +19,24 @@
     },
   };
 
+  // VE.Bus states (Victron /VebusState, Modbus vebus 31 / system 844): raw code or English text -> translated text
+  const VEBUS = {
+    codes: { 0: 'off', 1: 'low_power', 2: 'fault', 3: 'bulk', 4: 'absorption', 5: 'float', 6: 'storage', 7: 'equalize',
+      8: 'passthru', 9: 'inverting', 10: 'power_assist', 11: 'power_supply', 244: 'sustain', 252: 'external_control' },
+    en: { off: 'Off', low_power: 'Low power', fault: 'Fault', bulk: 'Bulk', absorption: 'Absorption', float: 'Float',
+      storage: 'Storage', equalize: 'Equalize', passthru: 'Passthru', inverting: 'Inverting', power_assist: 'Power assist',
+      power_supply: 'Power supply', sustain: 'Sustain', external_control: 'External control' },
+    sk: { off: 'Vypnutý', low_power: 'Úsporný režim', fault: 'Porucha', bulk: 'Bulk', absorption: 'Absorpcia',
+      float: 'Udržiavanie', storage: 'Skladovanie', equalize: 'Vyrovnávanie', passthru: 'Priechod', inverting: 'Invertovanie',
+      power_assist: 'Podpora siete', power_supply: 'Napájanie', sustain: 'Udržiavanie SoC', external_control: 'Externé riadenie' },
+  };
+  const vebusKey = (v) => {
+    const s = String(v ?? '').trim();
+    if (/^\d+$/.test(s)) return VEBUS.codes[+s] || null;
+    const k = s.toLowerCase().replace(/passthrough/, 'passthru').replace(/[\s-]+/g, '_');
+    return VEBUS.en[k] ? k : null;
+  };
+
   const COLORS = {
     grid: '#9FB3C8', import: '#E07A5F', export: '#9FB3C8', inverter: '#387DC5', loads: '#4AB9C1',
     battery: '#5DBE6E', dc: '#F7AB3E', ac: '#FDD835',
@@ -38,6 +56,24 @@
   const list = (v) => (v == null || v === '' ? [] : Array.isArray(v) ? v : [v]);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const boxH = (n) => (n ? 92 + 16 * (n - 1) : 70);
+  const HDR_H = 22; // header bar height (header_style: bar)
+
+  // readable text color (dark or white) for a header bar of the given color
+  const onColor = (col) => {
+    const s = String(col).trim();
+    let rgb = null;
+    let m = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (m) {
+      const h = m[1].length === 3 ? m[1].replace(/./g, '$&$&') : m[1];
+      rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+    } else if ((m = s.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i))) {
+      rgb = [m[1], m[2], m[3]].map(Number);
+    }
+    if (!rgb) return 'rgba(0,0,0,.87)';
+    const [r, g, b] = rgb.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? 'rgba(0,0,0,.87)' : '#fff';
+  };
 
   const STYLE = `
     :host { display: block; }
@@ -80,6 +116,7 @@
       if (!cfg.loads || !list(cfg.loads.power).length) throw new Error('loads.power is required');
       const src = (a) => list(a).map((s) => (typeof s === 'string' ? { power: s } : s)).filter((s) => s && s.power);
       this._cfg = Object.assign({ layout: 'auto', min_flow: 10 }, cfg, {
+        header_style: cfg.header_style === 'stripe' ? 'stripe' : 'bar',
         dc_sources: src(cfg.dc_sources), ac_sources: src(cfg.ac_sources),
         colors: Object.assign({}, COLORS, cfg.colors || {}),
       });
@@ -94,6 +131,16 @@
       this._key = null;
       this._sig = null;
       this._render();
+    }
+
+    // inverter state: known VE.Bus states translated by the card, anything else via HA (translated enums) or raw
+    _stateText(e) {
+      const so = this._so(e);
+      if (!so) return undefined;
+      const k = vebusKey(so.state);
+      if (k) return (VEBUS[this._lang.split('-')[0]] || VEBUS.en)[k];
+      try { if (this._hass.formatEntityState) return this._hass.formatEntityState(so); } catch (err) { /* fall back */ }
+      return so.state;
     }
 
     set hass(h) {
@@ -203,7 +250,7 @@
         const parts = [this._W(bat)];
         if (b.voltage) parts.push(`${this._f(this._num(b.voltage), 1)} V`);
         if (b.current) parts.push(`${this._f(this._num(b.current), 1)} A`);
-        const state = b.state ? String(this._st(b.state) ?? '–')
+        const state = b.state ? String(this._stateText(b.state) ?? '–')
           : Number.isNaN(bat) ? '–' : Math.abs(bat) < min ? t.idle : bat > 0 ? t.charging : t.discharging;
         const bl = [parts.join(' · '), state];
         list(b.extra).forEach((x) => bl.push(this._extra(x)));
@@ -216,10 +263,10 @@
       const i = c.inverter;
       const outIds = list(i.power);
       const out = outIds.length ? this._sum(outIds) : load - (Number.isNaN(acT) ? 0 : acT);
-      const st = i.state ? this._st(i.state) : null;
+      const st = i.state ? this._stateText(i.state) : null;
       const il = [];
       if (outIds.length) il.push(`${t.output} ${this._W(out)}`);
-      if (i.mode) il.push(String(this._st(i.mode) ?? '–'));
+      if (i.mode) il.push(String(this._stateText(i.mode) ?? '–'));
       list(i.extra).forEach((x) => il.push(this._extra(x)));
       B.inverter = { label: i.name || t.inverter, color: C.inverter, value: st != null ? esc(st) : this._num0(out),
         unit: st != null ? '' : 'W', lines: il, e: tap(i, i.state || outIds[0]) };
@@ -270,7 +317,9 @@
       Object.entries(L.pos).forEach(([k, p]) => {
         defs += `<clipPath id="c-${k}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/></clipPath>`;
         boxes += `<g><rect class="bg" data-e="${esc(B[k].e || '')}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/>`
-          + `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${B[k].color}" clip-path="url(#c-${k})"/>`
+          + (this._cfg.header_style === 'bar'
+            ? `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${B[k].color}" clip-path="url(#c-${k})"/>`
+            : `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${B[k].color}" clip-path="url(#c-${k})"/>`)
           + `<g data-box="${k}"></g></g>`;
       });
       const title = this._cfg.title ? `<div class="title">${esc(this._cfg.title)}</div>` : '';
@@ -296,15 +345,18 @@
       if (key !== this._key) { this._build(L, B); this._key = key; }
       const root = this.shadowRoot;
 
-      // texts
+      // texts (bar: title in the header bar, content moved up a little)
+      const bar = this._cfg.header_style === 'bar';
+      const yL = bar ? 15 : 24, yV = bar ? 52 : 56, yS = bar ? 74 : 78;
       Object.entries(L.pos).forEach(([k, p]) => {
-        const b = B[k], x = p.x + 16, mx = p.w - 26;
+        const b = B[k], x = p.x + (bar ? 12 : 16), mx = p.w - (bar ? 22 : 26);
         const vc = b.valueColor ? ` style="fill:${b.valueColor}"` : '';
         const small = b.unit === '' && String(b.value).length > 10 ? ' small' : '';
-        let s = `<text class="lbl" x="${x}" y="${p.y + 24}" data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
-        s += `<text class="val${small}" x="${x}" y="${p.y + 56}"${vc} data-max="${mx}">${b.value}`
+        const lc = bar ? ` style="fill:${onColor(b.color)}"` : '';
+        let s = `<text class="lbl" x="${x}" y="${p.y + yL}"${lc} data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
+        s += `<text class="val${small}" x="${x}" y="${p.y + yV}"${vc} data-max="${mx}">${b.value}`
           + (b.unit ? `<tspan class="u" dx="4">${b.unit}</tspan>` : '') + '</text>';
-        b.lines.forEach((ln, i) => { s += `<text class="sub" x="${x}" y="${p.y + 78 + 16 * i}" data-max="${mx}">${esc(ln)}</text>`; });
+        b.lines.forEach((ln, i) => { s += `<text class="sub" x="${x}" y="${p.y + yS + 16 * i}" data-max="${mx}">${esc(ln)}</text>`; });
         const g = root.querySelector(`[data-box="${k}"]`);
         if (g) g.innerHTML = s;
       });

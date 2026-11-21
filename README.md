@@ -3,6 +3,8 @@
 Animated energy-flow card for Home Assistant, made for Victron ESS systems
 (MultiPlus / Quattro with a battery, MPPT chargers and AC-coupled PV inverters).
 
+![Victron ESS Flow Card](images/screenshot.png)
+
 The diagram follows how such a system is actually wired:
 
 ```
@@ -93,6 +95,7 @@ ac_label: Solar AC
 | `title` | – | Card title |
 | `layout` | `auto` | `auto`, `portrait` or `landscape` |
 | `min_flow` | `10` | Below this power (W) a line is shown as idle |
+| `header_style` | `bar` | `bar` = colored header bar with the box title, `stripe` = colored stripe on the left |
 | `colors` | built-in | Override colors: `grid`, `import`, `export`, `inverter`, `loads`, `battery`, `dc`, `ac` |
 | `dc_label` | `Solar DC` | Title of the DC-coupled PV box |
 | `ac_label` | `Solar AC` | Title of the AC-coupled PV box |
@@ -111,7 +114,7 @@ Common options for `grid`, `inverter`, `loads` and `battery`:
 | Section | Option | Required | Description |
 |---|---|---|---|
 | `grid` | `power` | yes | Grid power, + = import (entity or list of phases) |
-| `inverter` | `state` | – | Inverter state shown as the main value (e.g. Bulk, Inverting) |
+| `inverter` | `state` | – | Inverter state shown as the main value (e.g. Bulk, Inverting); VE.Bus states (English text or numeric code) are translated to the HA language |
 | | `power` | – | AC output power (entity or list); if missing, computed as loads − AC PV |
 | | `dc_power` | – | DC power of the inverter, + = charging the battery; if missing, computed as battery − DC PV |
 | | `invert_dc` | – | `true` flips the sign of `dc_power` |

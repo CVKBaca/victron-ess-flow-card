@@ -3,7 +3,7 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.3.0';
+  const VERSION = '0.4.0';
   const TAG = 'victron-ess-flow-card';
   const LS_KEY = `${TAG}:view`; // view chosen with the toggle, remembered per device (browser)
 
@@ -48,7 +48,7 @@
 
   // portrait = phones / narrow columns, landscape = wide cards
   const LAYOUTS = {
-    portrait: { W: 380, bw: 160, cols: [0, 220], gap: 52, rows: [['grid', 'ac'], ['inverter', 'loads'], ['battery', 'dc']] },
+    portrait: { W: 380, bw: 160, cols: [0, 220], gap: 32, rows: [['grid', 'ac'], ['inverter', 'loads'], ['battery', 'dc']] },
     landscape: { W: 960, bw: 200, cols: [0, 380, 760], gap: 60, rows: [['grid', 'inverter', 'loads'], ['dc', 'battery', 'ac']] },
     // landscape with consumers: 4th column right of the loads box
     landscape4: { W: 1240, bw: 200, cols: [0, 350, 700, 1040], gap: 60, rows: [['grid', 'inverter', 'loads'], ['dc', 'battery', 'ac']] },
@@ -56,6 +56,12 @@
   const CONS_GAP = 12;    // gap between consumer boxes
   const CONS_FIRST = 28;  // portrait: gap between the loads box and the first row of consumers
   const CORNER_R = 10;    // radius of rounded line corners
+  // background graphs: today from 00:00 in 5-minute bins; data per entity, shared by all cards on the page
+  const BIN_MS = 5 * 60 * 1000;
+  const GRAPH_BINS = 288;
+  const GRAPH_REFETCH = 10 * 60 * 1000; // no update for this long (e.g. phone asleep) -> reload today's history
+  const GRAPH_CACHE = new Map();         // entity id -> { day, vals: Float64Array, last, loading }
+  const dayStart = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const CONS_PER_ROW = 2; // portrait: consumers side by side, right of the inverter-battery line up to the card edge
   const LANDSCAPE_MIN_WIDTH = 560;
 
@@ -113,12 +119,16 @@
     .val.small { font-size: 20px; }
     .u { font-size: 13px; font-weight: 500; fill-opacity: .7; }
     .sub { fill: var(--secondary-text-color); font-size: 12px; }
+    .sub.ong { fill: var(--primary-text-color); } /* compact view: brighter lines (readable over the graphs) */
     .th { fill: var(--secondary-text-color); font-size: 11px; }
     .tc { fill: var(--primary-text-color); font-size: 11px; font-variant-numeric: tabular-nums; }
     .ln { fill: none; stroke: var(--divider-color, rgba(127,127,127,.25)); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
     .la { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity .4s; }
     .la.on { opacity: .35; }
     text { pointer-events: none; }
+    .gr { pointer-events: none; }
+    .gra { stroke: none; fill-opacity: .2; }
+    .grl { fill: none; stroke-width: 1.5; stroke-opacity: .55; stroke-linejoin: round; }
   `;
 
   class VictronEssFlowCard extends HTMLElement {
@@ -150,6 +160,15 @@
         colors: Object.assign({}, COLORS, cfg.colors || {}),
       });
       const c = this._cfg;
+      // background graphs of today: graphs: [dc, ac, battery, loads, grid]
+      // (PV = sum of the sources' power, battery = SoC 0-100 %, grid = import above / export below a zero line)
+      const gl = list(c.graphs), pw = (arr) => arr.flatMap((x) => list(x.power));
+      this._graphs = {};
+      if (gl.includes('dc') && c.dc_sources.length) this._graphs.dc = { ents: pw(c.dc_sources), pct: false };
+      if (gl.includes('ac') && c.ac_sources.length) this._graphs.ac = { ents: pw(c.ac_sources), pct: false };
+      if (gl.includes('battery') && c.battery && c.battery.soc) this._graphs.battery = { ents: [c.battery.soc], pct: true };
+      if (gl.includes('loads')) this._graphs.loads = { ents: list(c.loads.power), sign: c.loads.invert ? -1 : 1 };
+      if (gl.includes('grid')) this._graphs.grid = { ents: list(c.grid.power), sign: c.grid.invert ? -1 : 1, bi: true };
       const ents = [...list(c.grid.power), ...list(c.loads.power), c.inverter.state, ...list(c.inverter.power),
         c.inverter.dc_power, c.inverter.mode];
       if (c.battery) ents.push(...list(c.battery.power), c.battery.soc, c.battery.voltage, c.battery.current, c.battery.state);
@@ -161,7 +180,8 @@
       // detailed view: phase values, PV strings, detail-only lines
       const more = (o) => {
         if (!o) return;
-        ents.push(...list(o.voltage), ...list(o.current), ...list(o.phase_power), ...list(o.detail).map((x) => x && x.entity));
+        ents.push(...list(o.voltage), ...list(o.current), ...list(o.phase_power), ...list(o.detail).map((x) => x && x.entity),
+          ...list(o.header_extra).map((x) => x && x.entity));
         list(o.strings).forEach((s) => s && ents.push(...list(s.power), ...list(s.voltage), ...list(s.current)));
       };
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => more(c[k]));
@@ -448,6 +468,10 @@
       // DC bus between inverter and battery: + = inverter charges the battery
       F.dcbus = i.dc_power ? this._pw(i.dc_power) * (i.invert_dc ? -1 : 1) : bat - (Number.isNaN(dcT) ? 0 : dcT);
 
+      // header_extra: values in the box header, right-aligned (e.g. tariff)
+      const hx = (k, o) => { if (B[k] && o) B[k].hx = list(o.header_extra).filter(Boolean).map((x) => this._extra(x)).join(' · '); };
+      ['grid', 'inverter', 'loads', 'battery'].forEach((k) => hx(k, c[k]));
+      c.consumers.forEach((x, j) => hx('c' + j, x));
       return { B, F };
     }
 
@@ -578,6 +602,7 @@
           + (this._cfg.header_style === 'bar'
             ? `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`
             : `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`)
+          + (this._graphs[k] && this._graphsOn() ? this._graphEl(k, B[k].color) : '')
           + `<g data-box="${k}"></g></g>`;
       });
       // header: title (left) and the view toggle (right)
@@ -601,6 +626,150 @@
         this.dispatchEvent(new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId: r.dataset.e } }));
       });
       this._flowQ = {};
+    }
+
+    // ---------------------------------------------------------------- graphs
+    _graphEl(k, color) {
+      const C = this._cfg.colors, g = this._graphs[k];
+      const pair = (sfx, col) => `<path class="gra" data-gra${sfx}="${k}" fill="${esc(col)}"/><path class="grl" data-grl${sfx}="${k}" stroke="${esc(col)}"/>`;
+      // colors.<box>_graph overrides the graph color (grid: both import and export)
+      const gc = C[k + '_graph'];
+      return `<g class="gr" clip-path="url(#c-${k})">${g.bi ? pair('', gc || C.import) + pair('2', gc || C.export) : pair('', gc || color)}</g>`;
+    }
+    _unitK(id) { return ((this._so(id) || {}).attributes || {}).unit_of_measurement === 'kW' ? 1000 : 1; }
+
+    // live values into today's bins; reload history when missing, from yesterday or after a gap
+    _graphTick() {
+      const now = Date.now(), d0 = dayStart(), need = [];
+      const bin = (t) => Math.min(GRAPH_BINS - 1, Math.floor((t - d0) / BIN_MS));
+      Object.values(this._graphs).forEach((g) => g.ents.forEach((id) => {
+        let e = GRAPH_CACHE.get(id);
+        if (!e || e.day !== d0) {
+          e = { day: d0, vals: new Float64Array(GRAPH_BINS).fill(NaN), last: 0, loading: false };
+          GRAPH_CACHE.set(id, e);
+        }
+        if (e.loading) return;
+        if (now - e.last > GRAPH_REFETCH) { if (!need.includes(id)) need.push(id); return; }
+        const v = this._pw(id);
+        if (Number.isNaN(v)) return;
+        // the state holds until it changes: carry the last value over skipped bins, the current bin follows the state
+        const b = bin(now), lb = e.last >= d0 ? bin(e.last) : -1;
+        for (let i = lb + 1; i < b; i++) if (lb >= 0 && Number.isNaN(e.vals[i])) e.vals[i] = e.vals[lb];
+        e.vals[b] = v;
+        e.last = now;
+      }));
+      if (need.length) this._graphFetch(need, d0);
+    }
+
+    // today's 5-minute bins: recorder short-term statistics (5-minute means, small and fast); entities without
+    // statistics (no state_class) fall back to the state history, time-weighted per bin
+    async _graphFetch(ids, d0) {
+      ids.forEach((id) => { GRAPH_CACHE.get(id).loading = true; });
+      const start_time = new Date(d0).toISOString();
+      let st = {}, hist = {};
+      try {
+        st = await this._hass.callWS({ type: 'recorder/statistics_during_period', start_time, statistic_ids: ids,
+          period: '5minute', types: ['mean'], units: { power: 'W' } }) || {};
+      } catch (err) { /* no statistics */ }
+      const rest = ids.filter((id) => !(st[id] && st[id].length));
+      if (rest.length) {
+        try {
+          hist = await this._hass.callWS({ type: 'history/history_during_period', start_time, entity_ids: rest,
+            minimal_response: true, no_attributes: true, significant_changes_only: false }) || {};
+        } catch (err) { /* no history: the graph is built from live values only */ }
+      }
+      const now = Date.now();
+      ids.forEach((id) => {
+        const e = GRAPH_CACHE.get(id);
+        if (!e) return;
+        e.loading = false;
+        e.last = now;
+        if (e.day !== d0) return;
+        const vals = new Float64Array(GRAPH_BINS).fill(NaN);
+        if (st[id] && st[id].length) {
+          st[id].forEach((x) => {
+            const t = typeof x.start === 'number' ? x.start : Date.parse(x.start);
+            const b = Math.floor((t - d0) / BIN_MS);
+            if (b >= 0 && b < GRAPH_BINS && Number.isFinite(x.mean)) vals[b] = x.mean;
+          });
+        } else {
+          const k = this._unitK(id);
+          const pts = (hist[id] || []).map((x) => [Math.max(d0, (x.lu || x.lc || 0) * 1000), parseFloat(x.s) * k]);
+          const sum = new Float64Array(GRAPH_BINS), dur = new Float64Array(GRAPH_BINS);
+          pts.forEach(([t, v], i) => {
+            if (!Number.isFinite(v)) return;
+            const t1 = i + 1 < pts.length ? pts[i + 1][0] : now;
+            for (let a = t; a < t1;) {
+              const b = Math.floor((a - d0) / BIN_MS);
+              if (b >= GRAPH_BINS) break;
+              const end = Math.min(t1, d0 + (b + 1) * BIN_MS);
+              sum[b] += v * (end - a); dur[b] += end - a; a = end;
+            }
+          });
+          for (let b = 0; b < GRAPH_BINS; b++) if (dur[b]) vals[b] = sum[b] / dur[b];
+        }
+        // statistics end with the last finished 5 minutes: carry the last value up to now, live values follow
+        let lv = NaN;
+        const cb = Math.min(GRAPH_BINS - 1, Math.floor((now - d0) / BIN_MS));
+        for (let b = 0; b <= cb; b++) { if (Number.isNaN(vals[b])) vals[b] = lv; else lv = vals[b]; }
+        const v = this._pw(id);
+        if (!Number.isNaN(v)) vals[cb] = v;
+        e.vals = vals;
+      });
+      this._render(true);
+    }
+
+    // graphs are drawn in the compact view only, unless graphs_view says otherwise
+    _graphsOn() {
+      const gv = this._cfg.graphs_view;
+      return Object.keys(this._graphs).length > 0 && (gv === 'both' || this._view === (gv === 'detail' ? 'detail' : 'compact'));
+    }
+
+    // area + line from 00:00 to now, under the box header; power scaled to today's maximum, SoC to 0-100 %;
+    // grid: zero line, import above (import color), export below (export color)
+    _drawGraphs(L) {
+      const root = this.shadowRoot, bar = this._cfg.header_style === 'bar', d0 = dayStart();
+      const cur = Math.min(GRAPH_BINS - 1, Math.floor((Date.now() - d0) / BIN_MS));
+      Object.entries(this._graphs).forEach(([k, g]) => {
+        const p = L.pos[k];
+        if (!p) return;
+        const es = g.ents.map((id) => GRAPH_CACHE.get(id)).filter((e) => e && e.day === d0);
+        const ser = [];
+        let prev = NaN;
+        for (let b = 0; b <= cur; b++) {
+          let s = 0, ok = false;
+          es.forEach((e) => { const v = e.vals[b]; if (!Number.isNaN(v)) { s += v; ok = true; } });
+          prev = ok ? s * (g.sign || 1) : prev;
+          ser.push(prev);
+        }
+        const valid = ser.filter((v) => !Number.isNaN(v));
+        const top = p.y + (bar ? HDR_H : 0) + 4, bot = p.y + p.h, H = bot - top;
+        const maxP = Math.max(0, ...valid), maxN = Math.max(0, ...valid.map((v) => -v));
+        let k1, base;
+        if (g.pct) { k1 = H / 100; base = bot; }
+        else {
+          // at least 100 W, so idle noise stays flat; 10 % headroom
+          k1 = H / (Math.max(100, maxP + (g.bi ? maxN : 0)) * 1.1);
+          base = g.bi ? bot - maxN * k1 : bot;
+        }
+        const X = (b) => (p.x + p.w * (b + 0.5) / GRAPH_BINS).toFixed(1);
+        const Y = (v) => Math.max(top, Math.min(bot, base - v * k1)).toFixed(1);
+        const draw = (sfx, f) => {
+          const a = root.querySelector(`[data-gra${sfx}="${k}"]`), l = root.querySelector(`[data-grl${sfx}="${k}"]`);
+          if (!a || !l) return;
+          let line = '', first = -1, last = -1;
+          ser.forEach((v, b) => {
+            if (Number.isNaN(v)) return;
+            line += `${first < 0 ? 'M' : 'L'}${X(b)},${Y(f(v))}`;
+            if (first < 0) first = b;
+            last = b;
+          });
+          l.setAttribute('d', line);
+          a.setAttribute('d', first < 0 ? '' : `${line}L${X(last)},${base.toFixed(1)}L${X(first)},${base.toFixed(1)}Z`);
+        };
+        if (g.bi) { draw('', (v) => Math.max(0, v)); draw('2', (v) => Math.min(0, v)); }
+        else draw('', (v) => v);
+      });
     }
 
     _render(force) {
@@ -627,13 +796,17 @@
         const tc = b.textColor || this._cfg.colors[k + '_text'];
         const lc = bar || tc ? ` style="fill:${esc(tc || onColor(b.color, TEXT_L))}"` : '';
         let s = `<text class="lbl" x="${x}" y="${p.y + yL}"${lc} data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
+        // header_extra: right-aligned in the box header
+        if (b.hx) s += `<text class="lbl" x="${p.x + p.w - (bar ? 10 : 12)}" y="${p.y + yL}" text-anchor="end"${lc} `
+          + `font-weight="500" letter-spacing="0">${esc(b.hx)}</text>`;
         s += `<text class="val${small}" x="${x}" y="${p.y + yV}"${vc} data-max="${mx}">${b.value}`
           + (b.unit ? `<tspan class="u" dx="4">${b.unit}</tspan>` : '') + '</text>';
+        const ong = this._view === 'compact' ? ' ong' : '';
         let off = 0;
         b.lines.forEach((ln) => {
           const y = p.y + yS + off;
           off += itemH(ln);
-          if (typeof ln === 'string') { s += `<text class="sub" x="${x}" y="${y}" data-max="${mx}">${esc(ln)}</text>`; return; }
+          if (typeof ln === 'string') { s += `<text class="sub${ong}" x="${x}" y="${y}" data-max="${mx}">${esc(ln)}</text>`; return; }
           // table: units in the header, values right-aligned in columns after the row label
           const lw = 24, cx = (i) => (x + lw + (mx - lw) * (i + 1) / ln.head.length).toFixed(1);
           ln.head.forEach((h, i) => { s += `<text class="th" x="${cx(i)}" y="${y}" text-anchor="end">${esc(h)}</text>`; });
@@ -652,6 +825,8 @@
           if (el.getComputedTextLength() > max) { el.setAttribute('textLength', max); el.setAttribute('lengthAdjust', 'spacingAndGlyphs'); }
         } catch (e) { /* not rendered yet */ }
       });
+
+      if (Object.keys(this._graphs).length) { this._graphTick(); if (this._graphsOn()) this._drawGraphs(L); }
 
       // animated flows
       (this._flows || []).forEach((f) => {

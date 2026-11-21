@@ -19,6 +19,7 @@ Grid ──── Inverter/charger ──── AC loads ──── AC-coupled
 - Every value is a single entity or a list of entities (e.g. three phases), which are summed.
 - Tap a box to open the more-info dialog.
 - Compact or detailed view (per-phase V · A · W tables, PV strings, extra lines), switched by an icon in the card header.
+- Optional background graphs of today (PV, loads, grid import / export, battery SoC).
 - Plain JavaScript, no dependencies, no build step.
 
 ## Installation
@@ -105,9 +106,11 @@ ac_label: Solar AC
 | `layout` | `auto` | `auto`, `portrait` or `landscape` |
 | `min_flow` | `10` | Below this power (W) a line is shown as idle |
 | `header_style` | `bar` | `bar` = colored header bar with the box title, `stripe` = colored stripe on the left |
-| `colors` | built-in | Override colors: `grid`, `import`, `export`, `inverter`, `loads`, `battery`, `dc`, `ac`, `header` (card header). Title text colors: `header_text`, `grid_text`, `inverter_text`, `loads_text`, `battery_text`, `dc_text`, `ac_text` (default: white, dark on light colors) |
+| `colors` | built-in | Override colors: `grid`, `import`, `export`, `inverter`, `loads`, `battery`, `dc`, `ac`, `header` (card header). Title text colors: `header_text`, `grid_text`, `inverter_text`, `loads_text`, `battery_text`, `dc_text`, `ac_text` (default: white, dark on light colors). Graph colors: `grid_graph`, `loads_graph`, `battery_graph`, `dc_graph`, `ac_graph` (default: the box color; grid: `import` / `export`) |
 | `dc_label` | `Solar DC` | Title of the DC-coupled PV box |
 | `ac_label` | `Solar AC` | Title of the AC-coupled PV box |
+| `graphs` | – | Background graphs of today (from 00:00) in the boxes: list of `dc`, `ac`, `battery`, `loads`, `grid` (see [Graphs](#graphs)) |
+| `graphs_view` | `compact` | View with graphs: `compact`, `detail` or `both` |
 | `view` | `compact` | `compact` or `detail` (see [Detailed view](#detailed-view)) |
 | `view_toggle` | `true` | Icon in the card header (right) switching the view; the choice is remembered per device (browser) and wins over `view`. `false` = always `view` |
 
@@ -120,6 +123,7 @@ Common options for `grid`, `inverter`, `loads` and `battery`:
 | `name` | Box title |
 | `invert` | `true` flips the sign of `power` |
 | `extra` | Extra lines: list of `{entity, name, unit}` |
+| `header_extra` | Values in the box header, right-aligned (e.g. tariff): list of `{entity, name, unit}`; also for consumers |
 | `tap_entity` | Entity opened on tap (default: the main entity of the box) |
 
 | Section | Option | Required | Description |
@@ -153,6 +157,21 @@ Portrait: consumers sit side by side under the AC loads box (two per row); the l
 Landscape: consumers are stacked in a 4th column.
 
 Power entities may be in W or kW (converted by `unit_of_measurement`).
+
+### Graphs
+
+`graphs: [dc, ac, battery, loads, grid]` draws today's curve (00:00 – now, 5-minute averages) behind the box content:
+PV boxes the sum of the sources' power and the AC loads box the sum of its `power` entities (scaled to today's maximum),
+the battery box the state of charge (0–100 %), the grid box import above and export below a zero line
+(colors `import` / `export`; the zero line sits by today's maximum import vs. export).
+Today's data come from the recorder's 5-minute statistics (entities with a `state_class`; others fall back to the
+state history, which is much larger) and are then extended with live values; after a longer pause
+(e.g. a phone asleep) it is reloaded. By default graphs are shown in the compact view only (`graphs_view`),
+the detailed view keeps its numbers readable.
+
+```yaml
+graphs: [dc, ac, battery, loads, grid]
+```
 
 ### Detailed view
 

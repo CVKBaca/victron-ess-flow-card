@@ -3,7 +3,7 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   const TAG = 'victron-ess-flow-card';
   const LS_KEY = `${TAG}:view`; // view chosen with the toggle, remembered per device (browser)
 
@@ -56,6 +56,7 @@
   const CONS_GAP = 12;    // gap between consumer boxes
   const CONS_FIRST = 28;  // portrait: gap between the loads box and the first row of consumers
   const CORNER_R = 10;    // radius of rounded line corners
+  const ALERT = '#E5484D'; // box header color while an alert is active
   // background graphs: today from 00:00 in 5-minute bins; data per entity, shared by all cards on the page
   const BIN_MS = 5 * 60 * 1000;
   const GRAPH_BINS = 288;
@@ -126,6 +127,16 @@
     .la { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity .4s; }
     .la.on { opacity: .35; }
     text { pointer-events: none; }
+    /* footer: bar in the style of the header, equal parts split by vertical dividers (tap = more-info) */
+    .ftr { display: flex; height: 34px; margin: 12px -12px -12px; background: var(--vefc-hdr); color: var(--vefc-hdr-text); }
+    .ftr.stripe { background: none; color: var(--primary-text-color); box-shadow: inset 0 1px 0 var(--divider-color, rgba(127,127,127,.25)); }
+    .chip { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0 6px;
+      border: 0; background: none; color: inherit; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+    .chip + .chip { background: linear-gradient(color-mix(in srgb, currentColor 45%, transparent),
+      color-mix(in srgb, currentColor 45%, transparent)) left center / 1px 18px no-repeat; }
+    .chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chip:hover { background-color: rgba(127,127,127,.2); }
+    .chip ha-icon { --mdc-icon-size: 16px; flex: none; }
     .gr { pointer-events: none; }
     .gra { stroke: none; fill-opacity: .2; }
     .grl { fill: none; stroke-width: 1.5; stroke-opacity: .55; stroke-linejoin: round; }
@@ -180,12 +191,14 @@
       // detailed view: phase values, PV strings, detail-only lines
       const more = (o) => {
         if (!o) return;
+        if (o.alert) ents.push(o.alert.entity, o.alert.text_entity);
         ents.push(...list(o.voltage), ...list(o.current), ...list(o.phase_power), ...list(o.detail).map((x) => x && x.entity),
           ...list(o.header_extra).map((x) => x && x.entity));
         list(o.strings).forEach((s) => s && ents.push(...list(s.power), ...list(s.voltage), ...list(s.current)));
       };
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => more(c[k]));
       [...c.dc_sources, ...c.ac_sources, ...c.consumers].forEach(more);
+      list(c.footer).forEach((x) => x && ents.push(x.entity));
       this._ents = [...new Set(ents.filter(Boolean))];
       this._key = null;
       this._sig = null;
@@ -246,8 +259,14 @@
     _extra(x) {
       const s = this._so(x.entity);
       if (!s) return `${x.name || x.entity}: –`;
-      const u = x.unit != null ? x.unit : (s.attributes.unit_of_measurement || '');
-      return `${x.name ? x.name + ': ' : ''}${s.state}${u ? ' ' + u : ''}`;
+      let v;
+      // value formatted by HA (translated states such as on -> On, display precision), unless a unit is given
+      if (x.unit == null && this._hass.formatEntityState) { try { v = this._hass.formatEntityState(s); } catch (e) { v = undefined; } }
+      if (v == null || v === '') {
+        const u = x.unit != null ? x.unit : (s.attributes.unit_of_measurement || '');
+        v = `${s.state}${u ? ' ' + u : ''}`;
+      }
+      return `${x.name ? x.name + ': ' : ''}${v}`;
     }
     // detail-only line: "name: value" (value formatted by HA: locale, display precision, translated states)
     _detailRow(x) {
@@ -472,6 +491,16 @@
       const hx = (k, o) => { if (B[k] && o) B[k].hx = list(o.header_extra).filter(Boolean).map((x) => this._extra(x)).join(' · '); };
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => hx(k, c[k]));
       c.consumers.forEach((x, j) => hx('c' + j, x));
+      // alert: header turns red while alert.entity is not in alert.ok (unknown / unavailable = no alert);
+      // text = text_entity (formatted) or text or the formatted state of the entity
+      const al = (k, o) => {
+        const a = o && o.alert, so = a && this._so(a.entity);
+        if (!B[k] || !so || ['unknown', 'unavailable'].includes(so.state)) return;
+        if (list(a.ok).map(String).includes(String(so.state))) return;
+        B[k].alert = a.text_entity ? this._extra({ entity: a.text_entity }) : a.text || this._extra({ entity: a.entity });
+      };
+      ['grid', 'inverter', 'loads', 'battery'].forEach((k) => al(k, c[k]));
+      c.consumers.forEach((x, j) => al('c' + j, x));
       return { B, F };
     }
 
@@ -600,8 +629,8 @@
         defs += `<clipPath id="c-${k}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/></clipPath>`;
         boxes += `<g><rect class="bg" data-e="${esc(B[k].e || '')}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/>`
           + (this._cfg.header_style === 'bar'
-            ? `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`
-            : `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`)
+            ? `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`
+            : `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`)
           + (this._graphs[k] && this._graphsOn() ? this._graphEl(k, B[k].color) : '')
           + `<g data-box="${k}"></g></g>`;
       });
@@ -616,16 +645,36 @@
         ? `<div class="hdr${bar ? '' : ' stripe'}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
           + `<div class="title">${esc(this._cfg.title || '')}</div>${tog}</div>` : '';
       this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${hdr}`
-        + `<svg viewBox="-2 -2 ${L.W + 4} ${L.H + 4}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${lines}${boxes}</svg></ha-card>`;
+        + `<svg viewBox="-2 -2 ${L.W + 4} ${L.H + 4}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${lines}${boxes}</svg>${this._footerEl()}</ha-card>`;
       if (hasTog) {
         this.shadowRoot.querySelector('.tg').addEventListener('click', () => this._setView(D ? 'compact' : 'detail'));
       }
+      this.shadowRoot.querySelectorAll('.chip').forEach((el) => el.addEventListener('click', () => this.dispatchEvent(
+        new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId: el.dataset.ent } }))));
       this.shadowRoot.querySelector('svg').addEventListener('click', (ev) => {
         const r = ev.composedPath().find((x) => x && x.dataset && x.dataset.e);
         if (!r) return;
         this.dispatchEvent(new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId: r.dataset.e } }));
       });
       this._flowQ = {};
+    }
+
+    // ---------------------------------------------------------------- footer
+    _footer() { return list(this._cfg.footer).filter((x) => x && x.entity); }
+    _footerEl() {
+      const f = this._footer();
+      if (!f.length) return '';
+      const hc = this._cfg.colors.header, bar = this._cfg.header_style === 'bar';
+      const ht = this._cfg.colors.header_text || onColor(hc, TEXT_L);
+      return `<div class="ftr${bar ? '' : ' stripe'}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
+        + `${f.map((x, i) => `<button class="chip" data-ent="${esc(x.entity)}">`
+        + `${x.icon ? `<ha-icon icon="${esc(x.icon)}"></ha-icon>` : ''}<span data-ft="${i}"></span></button>`).join('')}</div>`;
+    }
+    _renderFooter() {
+      this._footer().forEach((x, i) => {
+        const el = this.shadowRoot.querySelector(`[data-ft="${i}"]`);
+        if (el) el.textContent = this._extra(x);
+      });
     }
 
     // ---------------------------------------------------------------- graphs
@@ -794,11 +843,15 @@
         const small = b.unit === '' && String(b.value).length > 10 ? ' small' : '';
         // box title color: configured (colors.<box>_text, consumer text_color), else white / dark by the header color
         const tc = b.textColor || this._cfg.colors[k + '_text'];
-        const lc = bar || tc ? ` style="fill:${esc(tc || onColor(b.color, TEXT_L))}"` : '';
-        let s = `<text class="lbl" x="${x}" y="${p.y + yL}"${lc} data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
+        const hb = root.querySelector(`[data-hb="${k}"]`);
+        if (hb) hb.setAttribute('fill', b.alert ? ALERT : b.color);
+        const lc = b.alert && bar ? ' style="fill:#fff"' : bar || tc ? ` style="fill:${esc(tc || onColor(b.color, TEXT_L))}"` : '';
+        let s = `<text class="lbl" data-lblk="${k}" x="${x}" y="${p.y + yL}"${lc} data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
         // header_extra: right-aligned in the box header
-        if (b.hx) s += `<text class="lbl" x="${p.x + p.w - (bar ? 10 : 12)}" y="${p.y + yL}" text-anchor="end"${lc} `
-          + `font-weight="500" letter-spacing="0">${esc(b.hx)}</text>`;
+        // header_extra (or the alert text, bold) right-aligned in the box header
+        const hxt = b.alert || b.hx;
+        if (hxt) s += `<text class="lbl" data-hxk="${k}" x="${p.x + p.w - (bar ? 10 : 12)}" y="${p.y + yL}" text-anchor="end"`
+          + `${b.alert && !bar ? ` style="fill:${ALERT}"` : lc} font-weight="${b.alert ? 700 : 500}" letter-spacing="0">${esc(hxt)}</text>`;
         s += `<text class="val${small}" x="${x}" y="${p.y + yV}"${vc} data-max="${mx}">${b.value}`
           + (b.unit ? `<tspan class="u" dx="4">${b.unit}</tspan>` : '') + '</text>';
         const ong = this._view === 'compact' ? ' ong' : '';
@@ -819,6 +872,11 @@
         const g = root.querySelector(`[data-box="${k}"]`);
         if (g) g.innerHTML = s;
       });
+      // box title next to a header_extra value: only the room left of the value
+      root.querySelectorAll('text[data-hxk]').forEach((hx) => {
+        const lbl = root.querySelector(`[data-lblk="${hx.dataset.hxk}"]`);
+        try { if (lbl) lbl.dataset.max = Math.max(20, +lbl.dataset.max - hx.getComputedTextLength() - 8); } catch (e) { /* not rendered yet */ }
+      });
       root.querySelectorAll('text[data-max]').forEach((el) => {
         const max = +el.dataset.max;
         try {
@@ -827,6 +885,8 @@
       });
 
       if (Object.keys(this._graphs).length) { this._graphTick(); if (this._graphsOn()) this._drawGraphs(L); }
+
+      this._renderFooter();
 
       // animated flows
       (this._flows || []).forEach((f) => {

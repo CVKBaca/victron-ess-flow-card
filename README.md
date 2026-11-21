@@ -20,6 +20,7 @@ Grid ──── Inverter/charger ──── AC loads ──── AC-coupled
 - Tap a box to open the more-info dialog.
 - Compact or detailed view (per-phase V · A · W tables, PV strings, extra lines), switched by an icon in the card header.
 - Optional background graphs of today (PV, loads, grid import / export, battery SoC).
+- Footer chips (e.g. a Dynamic ESS switch, target SoC, price) and alerts that turn a box header red.
 - Plain JavaScript, no dependencies, no build step.
 
 ## Installation
@@ -111,6 +112,7 @@ ac_label: Solar AC
 | `ac_label` | `Solar AC` | Title of the AC-coupled PV box |
 | `graphs` | – | Background graphs of today (from 00:00) in the boxes: list of `dc`, `ac`, `battery`, `loads`, `grid` (see [Graphs](#graphs)) |
 | `graphs_view` | `compact` | View with graphs: `compact`, `detail` or `both` |
+| `footer` | – | Bar at the bottom in the style of the header, split into equal parts: list of `{entity, name, icon, unit}` (`name: ''` = value only); value formatted by HA, tap opens more-info (e.g. a switch with its toggle) |
 | `view` | `compact` | `compact` or `detail` (see [Detailed view](#detailed-view)) |
 | `view_toggle` | `true` | Icon in the card header (right) switching the view; the choice is remembered per device (browser) and wins over `view`. `false` = always `view` |
 
@@ -122,9 +124,10 @@ Common options for `grid`, `inverter`, `loads` and `battery`:
 |---|---|
 | `name` | Box title |
 | `invert` | `true` flips the sign of `power` |
-| `extra` | Extra lines: list of `{entity, name, unit}` |
-| `header_extra` | Values in the box header, right-aligned (e.g. tariff): list of `{entity, name, unit}`; also for consumers |
+| `extra` | Extra lines: list of `{entity, name, unit}`; value formatted by HA (translated states, display precision) unless `unit` is given |
+| `header_extra` | Values in the box header, right-aligned (e.g. tariff); the box title gets the room left of them: list of `{entity, name, unit}`; also for consumers |
 | `tap_entity` | Entity opened on tap (default: the main entity of the box) |
+| `alert` | `{entity, ok, text, text_entity}`: while `entity` is not in `ok` (a value or a list; `unknown` / `unavailable` are ignored) the box header turns red and shows the alert text (`text_entity` formatted, else `text`, else the state); also for consumers |
 
 | Section | Option | Required | Description |
 |---|---|---|---|
@@ -171,6 +174,28 @@ the detailed view keeps its numbers readable.
 
 ```yaml
 graphs: [dc, ac, battery, loads, grid]
+```
+
+### Footer and alerts
+
+```yaml
+footer:
+  - entity: switch.dess_enabled
+    name: DESS
+  - entity: sensor.dess_slot_target_soc
+    name: Target SoC
+grid:
+  power: sensor.grid_net_power
+  alert:
+    entity: sensor.grid_status
+    ok: 'OK'
+    text: Grid lost
+inverter:
+  state: sensor.vebus_state
+  alert:
+    entity: sensor.dess_error_code
+    ok: '0'
+    text_entity: sensor.dess_error_text
 ```
 
 ### Detailed view

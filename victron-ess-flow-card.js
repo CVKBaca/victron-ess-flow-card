@@ -1,0 +1,348 @@
+/*! victron-ess-flow-card — animated energy flow for Victron ESS systems
+ *  Grid, Multi/Quattro, AC loads, battery, DC-coupled (MPPT) and AC-coupled PV, drawn as they are wired.
+ *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
+ */
+(() => {
+  const VERSION = '0.1.0';
+  const TAG = 'victron-ess-flow-card';
+
+  const I18N = {
+    en: {
+      grid: 'Grid', inverter: 'Inverter', loads: 'AC loads', battery: 'Battery', dc: 'Solar DC', ac: 'Solar AC',
+      import: 'Import', export: 'Export', idle: 'Idle', output: 'Output', charging: 'Charging',
+      discharging: 'Discharging', today: 'Today',
+    },
+    sk: {
+      grid: 'Sieť', inverter: 'Menič', loads: 'Spotreba', battery: 'Batéria', dc: 'FV – DC', ac: 'FV – AC',
+      import: 'Odber', export: 'Dodávka', idle: 'Bez toku', output: 'Výstup', charging: 'Nabíja',
+      discharging: 'Vybíja', today: 'Dnes',
+    },
+  };
+
+  const COLORS = {
+    grid: '#9FB3C8', import: '#E07A5F', export: '#9FB3C8', inverter: '#387DC5', loads: '#4AB9C1',
+    battery: '#5DBE6E', dc: '#F7AB3E', ac: '#FDD835',
+  };
+
+  // portrait = phones / narrow columns, landscape = wide cards
+  const LAYOUTS = {
+    portrait: { W: 380, bw: 160, cols: [0, 220], gap: 52, rows: [['grid', 'ac'], ['inverter', 'loads'], ['battery', 'dc']] },
+    landscape: { W: 960, bw: 200, cols: [0, 380, 760], gap: 60, rows: [['grid', 'inverter', 'loads'], ['dc', 'battery', 'ac']] },
+  };
+  const LANDSCAPE_MIN_WIDTH = 560;
+
+  // flows: [from, to, key]; positive power flows from -> to
+  const FLOWS = [['grid', 'inverter', 'grid'], ['inverter', 'loads', 'out'], ['ac', 'loads', 'ac'],
+    ['inverter', 'battery', 'dcbus'], ['dc', 'battery', 'dc']];
+
+  const list = (v) => (v == null || v === '' ? [] : Array.isArray(v) ? v : [v]);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const boxH = (n) => (n ? 92 + 16 * (n - 1) : 70);
+
+  const STYLE = `
+    :host { display: block; }
+    ha-card { padding: 12px; overflow: hidden; }
+    .title { font-size: 16px; font-weight: 500; color: var(--primary-text-color); padding: 0 4px 10px; }
+    svg { display: block; width: 100%; height: auto; overflow: visible;
+      font-family: var(--ha-font-family-body, var(--paper-font-body1_-_font-family, Roboto, sans-serif)); }
+    .bg { fill: var(--secondary-background-color, #282828); cursor: pointer; }
+    .lbl { fill: var(--secondary-text-color); font-size: 11px; font-weight: 700; letter-spacing: .06em; }
+    .val { fill: var(--primary-text-color); font-size: 26px; font-weight: 700; }
+    .val.small { font-size: 20px; }
+    .u { font-size: 13px; font-weight: 500; fill-opacity: .7; }
+    .sub { fill: var(--secondary-text-color); font-size: 12px; }
+    .ln { fill: none; stroke: var(--divider-color, rgba(127,127,127,.25)); stroke-width: 3; stroke-linecap: round; }
+    .la { fill: none; stroke-width: 3; stroke-linecap: round; opacity: 0; transition: opacity .4s; }
+    .la.on { opacity: .35; }
+    text { pointer-events: none; }
+  `;
+
+  class VictronEssFlowCard extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: 'open' });
+      this._t = I18N.en;
+      this._lang = 'en';
+    }
+
+    static getStubConfig() {
+      return {
+        grid: { power: 'sensor.grid_power' },
+        inverter: { state: 'sensor.vebus_state' },
+        loads: { power: 'sensor.ac_loads_power' },
+        battery: { power: 'sensor.battery_power', soc: 'sensor.battery_soc' },
+      };
+    }
+
+    setConfig(cfg) {
+      if (!cfg || !cfg.grid || !list(cfg.grid.power).length) throw new Error('grid.power is required');
+      if (!cfg.inverter) throw new Error('inverter is required');
+      if (!cfg.loads || !list(cfg.loads.power).length) throw new Error('loads.power is required');
+      const src = (a) => list(a).map((s) => (typeof s === 'string' ? { power: s } : s)).filter((s) => s && s.power);
+      this._cfg = Object.assign({ layout: 'auto', min_flow: 10 }, cfg, {
+        dc_sources: src(cfg.dc_sources), ac_sources: src(cfg.ac_sources),
+        colors: Object.assign({}, COLORS, cfg.colors || {}),
+      });
+      const c = this._cfg;
+      const ents = [...list(c.grid.power), ...list(c.loads.power), c.inverter.state, ...list(c.inverter.power),
+        c.inverter.dc_power, c.inverter.mode];
+      if (c.battery) ents.push(...list(c.battery.power), c.battery.soc, c.battery.voltage, c.battery.current, c.battery.state);
+      [...c.dc_sources, ...c.ac_sources].forEach((s) => ents.push(...list(s.power), s.today));
+      list(c.loads.details).forEach((d) => ents.push(...list(d.power)));
+      ['grid', 'inverter', 'loads', 'battery'].forEach((k) => c[k] && list(c[k].extra).forEach((x) => ents.push(x.entity)));
+      this._ents = [...new Set(ents.filter(Boolean))];
+      this._key = null;
+      this._sig = null;
+      this._render();
+    }
+
+    set hass(h) {
+      this._hass = h;
+      const lang = (h.locale && h.locale.language) || h.language || 'en';
+      this._lang = lang;
+      this._t = I18N[lang.split('-')[0]] || I18N.en;
+      this._render();
+    }
+
+    connectedCallback() {
+      if (!this._ro) this._ro = new ResizeObserver(() => this._render(true));
+      this._ro.observe(this);
+    }
+
+    disconnectedCallback() {
+      if (this._ro) this._ro.disconnect();
+    }
+
+    getCardSize() { return 6; }
+    getGridOptions() { return { columns: 12, min_columns: 6 }; }
+
+    // ---------------------------------------------------------------- values
+    _so(e) { return e && this._hass ? this._hass.states[e] : undefined; }
+    _st(e) { const s = this._so(e); return s ? s.state : undefined; }
+    _num(e) { const v = parseFloat(this._st(e)); return Number.isFinite(v) ? v : NaN; }
+    _pw(e) {
+      const v = this._num(e);
+      const u = ((this._so(e) || {}).attributes || {}).unit_of_measurement;
+      return u === 'kW' ? v * 1000 : v;
+    }
+    _sum(ids) {
+      let t = 0, ok = false;
+      list(ids).forEach((e) => { const v = this._pw(e); if (!Number.isNaN(v)) { t += v; ok = true; } });
+      return ok ? t : NaN;
+    }
+    _f(v, d = 0) {
+      if (v == null || Number.isNaN(v)) return '–';
+      return new Intl.NumberFormat(this._lang, { minimumFractionDigits: d, maximumFractionDigits: d }).format(v);
+    }
+    _W(v) { return `${this._f(Number.isNaN(v) ? v : Math.round(v))} W`; }
+    _num0(v) { return Number.isNaN(v) ? '–' : this._f(Math.round(v)); }
+    _phases(ids) { return list(ids).length > 1 ? list(ids).map((e) => this._num0(this._pw(e))).join(' · ') + ' W' : null; }
+    _extra(x) {
+      const s = this._so(x.entity);
+      if (!s) return `${x.name || x.entity}: –`;
+      const u = x.unit != null ? x.unit : (s.attributes.unit_of_measurement || '');
+      return `${x.name ? x.name + ': ' : ''}${s.state}${u ? ' ' + u : ''}`;
+    }
+    _mode() {
+      const l = this._cfg.layout;
+      if (l === 'portrait' || l === 'landscape') return l;
+      const w = this.clientWidth || this.getBoundingClientRect().width || 0;
+      return w >= LANDSCAPE_MIN_WIDTH ? 'landscape' : 'portrait';
+    }
+
+    // ---------------------------------------------------------------- model
+    _model() {
+      const c = this._cfg, t = this._t, C = c.colors, min = c.min_flow;
+      const inv = (o) => (o && o.invert ? -1 : 1);
+      const B = {}, F = {};
+      const tap = (o, fallback) => (o && o.tap_entity) || fallback;
+
+      // grid (+ = import)
+      const grid = this._sum(c.grid.power) * inv(c.grid);
+      const idleG = Number.isNaN(grid) || Math.abs(grid) < min;
+      const gl = [Number.isNaN(grid) ? '–' : idleG ? t.idle : grid > 0 ? t.import : t.export];
+      const gp = this._phases(c.grid.power); if (gp) gl.push(gp);
+      list(c.grid.extra).forEach((x) => gl.push(this._extra(x)));
+      B.grid = { label: c.grid.name || t.grid, color: C.grid, value: this._num0(Math.abs(grid)), unit: 'W',
+        valueColor: idleG ? null : grid > 0 ? C.import : C.export, lines: gl, e: tap(c.grid, list(c.grid.power)[0]) };
+      F.grid = grid;
+
+      // PV sources (+ = production)
+      const srcBox = (arr, key, label) => {
+        if (!arr.length) return NaN;
+        let tot = 0, ok = false;
+        const lines = arr.map((s) => {
+          const p = this._sum(s.power); if (!Number.isNaN(p)) { tot += p; ok = true; }
+          const today = s.today ? `${this._f(this._num(s.today), 2)} kWh` : '';
+          if (arr.length === 1 && !s.name) return today ? `${t.today} ${today}` : '';
+          return `${s.name ? s.name + ' ' : ''}${this._W(p)}${today ? ' · ' + today : ''}`;
+        }).filter(Boolean);
+        const total = ok ? tot : NaN;
+        B[key] = { label, color: C[key], value: this._num0(total), unit: 'W', valueColor: C[key], lines, e: list(arr[0].power)[0] };
+        return total;
+      };
+      const dcT = srcBox(c.dc_sources, 'dc', c.dc_label || t.dc);
+      const acT = srcBox(c.ac_sources, 'ac', c.ac_label || t.ac);
+      F.dc = dcT; F.ac = acT;
+
+      // AC loads (+ = consumption)
+      const load = this._sum(c.loads.power) * inv(c.loads);
+      const ll = [];
+      const lp = this._phases(c.loads.power); if (lp) ll.push(lp);
+      list(c.loads.details).forEach((d) => ll.push(`${d.name || d.power} ${this._W(this._sum(d.power))}`));
+      list(c.loads.extra).forEach((x) => ll.push(this._extra(x)));
+      B.loads = { label: c.loads.name || t.loads, color: C.loads, value: this._num0(load), unit: 'W', lines: ll,
+        e: tap(c.loads, list(c.loads.power)[0]) };
+
+      // battery (+ = charging)
+      let bat = NaN;
+      if (c.battery) {
+        const b = c.battery;
+        bat = this._sum(b.power) * inv(b);
+        const soc = this._num(b.soc);
+        const parts = [this._W(bat)];
+        if (b.voltage) parts.push(`${this._f(this._num(b.voltage), 1)} V`);
+        if (b.current) parts.push(`${this._f(this._num(b.current), 1)} A`);
+        const state = b.state ? String(this._st(b.state) ?? '–')
+          : Number.isNaN(bat) ? '–' : Math.abs(bat) < min ? t.idle : bat > 0 ? t.charging : t.discharging;
+        const bl = [parts.join(' · '), state];
+        list(b.extra).forEach((x) => bl.push(this._extra(x)));
+        const sc = Number.isNaN(soc) ? null : soc < 20 ? '#E5484D' : soc < 50 ? '#F7AB3E' : C.battery;
+        B.battery = { label: b.name || t.battery, color: C.battery, value: this._num0(soc), unit: '%', valueColor: sc,
+          lines: bl, e: tap(b, b.soc || list(b.power)[0]) };
+      }
+
+      // inverter / charger
+      const i = c.inverter;
+      const outIds = list(i.power);
+      const out = outIds.length ? this._sum(outIds) : load - (Number.isNaN(acT) ? 0 : acT);
+      const st = i.state ? this._st(i.state) : null;
+      const il = [];
+      if (outIds.length) il.push(`${t.output} ${this._W(out)}`);
+      if (i.mode) il.push(String(this._st(i.mode) ?? '–'));
+      list(i.extra).forEach((x) => il.push(this._extra(x)));
+      B.inverter = { label: i.name || t.inverter, color: C.inverter, value: st != null ? esc(st) : this._num0(out),
+        unit: st != null ? '' : 'W', lines: il, e: tap(i, i.state || outIds[0]) };
+      F.out = out;
+      // DC bus between inverter and battery: + = inverter charges the battery
+      F.dcbus = i.dc_power ? this._pw(i.dc_power) * (i.invert_dc ? -1 : 1) : bat - (Number.isNaN(dcT) ? 0 : dcT);
+
+      return { B, F };
+    }
+
+    // ---------------------------------------------------------------- layout
+    _layout(mode, B) {
+      const P = LAYOUTS[mode];
+      const pos = {};
+      let y = 0;
+      P.rows.forEach((row) => {
+        const keys = row.filter((k) => B[k]);
+        if (!keys.length) return;
+        const h = Math.max(...keys.map((k) => boxH(B[k].lines.length)));
+        row.forEach((k, idx) => { if (B[k]) pos[k] = { x: P.cols[idx], y, w: P.bw, h }; });
+        y += h + P.gap;
+      });
+      return { W: P.W, H: y - P.gap, pos };
+    }
+
+    _path(a, b) {
+      if (a.y === b.y) {
+        const y = a.y + a.h / 2;
+        return a.x < b.x ? { d: `M${a.x + a.w},${y} L${b.x},${y}`, len: b.x - a.x - a.w }
+          : { d: `M${a.x},${y} L${b.x + b.w},${y}`, len: a.x - b.x - b.w };
+      }
+      const x = a.x + a.w / 2;
+      return a.y < b.y ? { d: `M${x},${a.y + a.h} L${x},${b.y}`, len: b.y - a.y - a.h }
+        : { d: `M${x},${a.y} L${x},${b.y + b.h}`, len: a.y - b.y - b.h };
+    }
+
+    _build(L, B) {
+      const C = this._cfg.colors;
+      let defs = '', boxes = '', lines = '';
+      this._flows = [];
+      FLOWS.forEach(([a, b, k]) => {
+        if (!L.pos[a] || !L.pos[b]) return;
+        const p = this._path(L.pos[a], L.pos[b]);
+        const col = { grid: C.grid, out: C.loads, ac: C.ac, dcbus: C.battery, dc: C.dc }[k];
+        this._flows.push({ k, d: p.d, len: p.len, col });
+        lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" stroke="${col}"/><g data-dots="${k}"></g>`;
+      });
+      Object.entries(L.pos).forEach(([k, p]) => {
+        defs += `<clipPath id="c-${k}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/></clipPath>`;
+        boxes += `<g><rect class="bg" data-e="${esc(B[k].e || '')}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/>`
+          + `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${B[k].color}" clip-path="url(#c-${k})"/>`
+          + `<g data-box="${k}"></g></g>`;
+      });
+      const title = this._cfg.title ? `<div class="title">${esc(this._cfg.title)}</div>` : '';
+      this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${title}`
+        + `<svg viewBox="-2 -2 ${L.W + 4} ${L.H + 4}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${lines}${boxes}</svg></ha-card>`;
+      this.shadowRoot.querySelector('svg').addEventListener('click', (ev) => {
+        const r = ev.composedPath().find((x) => x && x.dataset && x.dataset.e);
+        if (!r) return;
+        this.dispatchEvent(new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId: r.dataset.e } }));
+      });
+      this._flowQ = {};
+    }
+
+    _render(force) {
+      if (!this._cfg || !this._hass) return;
+      const mode = this._mode();
+      const sig = mode + '|' + this._ents.map((e) => this._st(e)).join('|') + '|' + this._lang;
+      if (!force && sig === this._sig) return;
+      this._sig = sig;
+      const { B, F } = this._model();
+      const key = mode + '|' + Object.keys(B).map((k) => k + B[k].lines.length).join(',');
+      const L = this._layout(mode, B);
+      if (key !== this._key) { this._build(L, B); this._key = key; }
+      const root = this.shadowRoot;
+
+      // texts
+      Object.entries(L.pos).forEach(([k, p]) => {
+        const b = B[k], x = p.x + 16, mx = p.w - 26;
+        const vc = b.valueColor ? ` style="fill:${b.valueColor}"` : '';
+        const small = b.unit === '' && String(b.value).length > 10 ? ' small' : '';
+        let s = `<text class="lbl" x="${x}" y="${p.y + 24}" data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
+        s += `<text class="val${small}" x="${x}" y="${p.y + 56}"${vc} data-max="${mx}">${b.value}`
+          + (b.unit ? `<tspan class="u" dx="4">${b.unit}</tspan>` : '') + '</text>';
+        b.lines.forEach((ln, i) => { s += `<text class="sub" x="${x}" y="${p.y + 78 + 16 * i}" data-max="${mx}">${esc(ln)}</text>`; });
+        const g = root.querySelector(`[data-box="${k}"]`);
+        if (g) g.innerHTML = s;
+      });
+      root.querySelectorAll('text[data-max]').forEach((el) => {
+        const max = +el.dataset.max;
+        try {
+          if (el.getComputedTextLength() > max) { el.setAttribute('textLength', max); el.setAttribute('lengthAdjust', 'spacingAndGlyphs'); }
+        } catch (e) { /* not rendered yet */ }
+      });
+
+      // animated flows
+      (this._flows || []).forEach((f) => {
+        const p = F[f.k];
+        const on = !Number.isNaN(p) && Math.abs(p) >= this._cfg.min_flow;
+        const dur = on ? Math.round(Math.max(0.6, Math.min(4, 4.6 - Math.log10(Math.abs(p)))) * Math.sqrt(Math.max(f.len, 20) / 60) * 4) / 4 : 0;
+        const q = on ? (p > 0 ? '+' : '-') + dur : 'off';
+        root.querySelector(`[data-la="${f.k}"]`).classList.toggle('on', on);
+        if (this._flowQ[f.k] === q) return;
+        this._flowQ[f.k] = q;
+        let s = '';
+        if (on) {
+          const n = Math.max(2, Math.round(f.len / 28));
+          const kp = p > 0 ? '0;1' : '1;0';
+          for (let j = 0; j < n; j++) {
+            s += `<circle r="3.5" fill="${f.col}"><animateMotion dur="${dur}s" begin="-${(j * dur / n).toFixed(2)}s" `
+              + `repeatCount="indefinite" path="${f.d}" keyPoints="${kp}" keyTimes="0;1" calcMode="linear"/></circle>`;
+          }
+        }
+        root.querySelector(`[data-dots="${f.k}"]`).innerHTML = s;
+      });
+    }
+  }
+
+  if (!customElements.get(TAG)) customElements.define(TAG, VictronEssFlowCard);
+  window.customCards = window.customCards || [];
+  if (!window.customCards.some((c) => c.type === TAG)) {
+    window.customCards.push({ type: TAG, name: 'Victron ESS Flow Card', preview: false,
+      description: 'Animated energy flow for Victron ESS: grid, inverter, loads, battery, DC and AC-coupled PV' });
+  }
+  console.info(`%c VICTRON-ESS-FLOW-CARD %c ${VERSION} `, 'color:#fff;background:#387DC5;font-weight:700', 'color:#387DC5');
+})();

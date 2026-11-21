@@ -1,0 +1,5 @@
+# local Claude Code files (not part of the card)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.mcp.json

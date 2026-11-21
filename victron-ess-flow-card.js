@@ -3,7 +3,7 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.1.0';
+  const VERSION = '0.2.0';
   const TAG = 'victron-ess-flow-card';
 
   const I18N = {
@@ -46,7 +46,13 @@
   const LAYOUTS = {
     portrait: { W: 380, bw: 160, cols: [0, 220], gap: 52, rows: [['grid', 'ac'], ['inverter', 'loads'], ['battery', 'dc']] },
     landscape: { W: 960, bw: 200, cols: [0, 380, 760], gap: 60, rows: [['grid', 'inverter', 'loads'], ['dc', 'battery', 'ac']] },
+    // landscape with consumers: 4th column right of the loads box
+    landscape4: { W: 1240, bw: 200, cols: [0, 350, 700, 1040], gap: 60, rows: [['grid', 'inverter', 'loads'], ['dc', 'battery', 'ac']] },
   };
+  const CONS_GAP = 12;    // gap between consumer boxes
+  const CONS_FIRST = 28;  // portrait: gap between the loads box and the first row of consumers
+  const CORNER_R = 10;    // radius of rounded line corners
+  const CONS_PER_ROW = 2; // portrait: consumers side by side, right of the inverter-battery line up to the card edge
   const LANDSCAPE_MIN_WIDTH = 560;
 
   // flows: [from, to, key]; positive power flows from -> to
@@ -87,8 +93,8 @@
     .val.small { font-size: 20px; }
     .u { font-size: 13px; font-weight: 500; fill-opacity: .7; }
     .sub { fill: var(--secondary-text-color); font-size: 12px; }
-    .ln { fill: none; stroke: var(--divider-color, rgba(127,127,127,.25)); stroke-width: 3; stroke-linecap: round; }
-    .la { fill: none; stroke-width: 3; stroke-linecap: round; opacity: 0; transition: opacity .4s; }
+    .ln { fill: none; stroke: var(--divider-color, rgba(127,127,127,.25)); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .la { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity .4s; }
     .la.on { opacity: .35; }
     text { pointer-events: none; }
   `;
@@ -118,6 +124,7 @@
       this._cfg = Object.assign({ layout: 'auto', min_flow: 10 }, cfg, {
         header_style: cfg.header_style === 'stripe' ? 'stripe' : 'bar',
         dc_sources: src(cfg.dc_sources), ac_sources: src(cfg.ac_sources),
+        consumers: list(cfg.loads.consumers).map((x) => (typeof x === 'string' ? { power: x } : x)).filter(Boolean),
         colors: Object.assign({}, COLORS, cfg.colors || {}),
       });
       const c = this._cfg;
@@ -126,6 +133,8 @@
       if (c.battery) ents.push(...list(c.battery.power), c.battery.soc, c.battery.voltage, c.battery.current, c.battery.state);
       [...c.dc_sources, ...c.ac_sources].forEach((s) => ents.push(...list(s.power), s.today));
       list(c.loads.details).forEach((d) => ents.push(...list(d.power)));
+      ents.push(c.loads.today);
+      c.consumers.forEach((x) => ents.push(...list(x.power), x.today, ...list(x.extra).map((e) => e.entity)));
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => c[k] && list(c[k].extra).forEach((x) => ents.push(x.entity)));
       this._ents = [...new Set(ents.filter(Boolean))];
       this._key = null;
@@ -236,10 +245,37 @@
       const load = this._sum(c.loads.power) * inv(c.loads);
       const ll = [];
       const lp = this._phases(c.loads.power); if (lp) ll.push(lp);
+      const loadToday = c.loads.today ? this._num(c.loads.today) : NaN;
+      if (c.loads.today) ll.push(`${t.today} ${this._f(loadToday, 2)} kWh`);
       list(c.loads.details).forEach((d) => ll.push(`${d.name || d.power} ${this._W(this._sum(d.power))}`));
       list(c.loads.extra).forEach((x) => ll.push(this._extra(x)));
       B.loads = { label: c.loads.name || t.loads, color: C.loads, value: this._num0(load), unit: 'W', lines: ll,
         e: tap(c.loads, list(c.loads.power)[0]) };
+
+      // consumers fed from the AC loads (bus); the first one without `power` gets the rest (loads − others)
+      // (same for today's energy: a consumer without `today` gets loads.today − others, if loads.today is set)
+      let known = 0, knownToday = 0, todayOk = true;
+      c.consumers.forEach((x) => {
+        const p = list(x.power).length ? this._sum(x.power) : NaN; if (!Number.isNaN(p)) known += p;
+        if (list(x.power).length) { const e = x.today ? this._num(x.today) : NaN; if (Number.isNaN(e)) todayOk = false; else knownToday += e; }
+      });
+      let restUsed = false;
+      c.consumers.forEach((x, j) => {
+        let p = NaN, today = x.today ? this._num(x.today) : NaN;
+        if (list(x.power).length) p = this._sum(x.power);
+        else if (!restUsed) {
+          restUsed = true;
+          p = Number.isNaN(load) ? NaN : Math.max(0, load - known);
+          if (!x.today && c.loads.today) today = todayOk && !Number.isNaN(loadToday) ? Math.max(0, loadToday - knownToday) : NaN;
+        }
+        const cl = [];
+        if (x.today || (!list(x.power).length && c.loads.today)) cl.push(`${t.today} ${this._f(today, 2)} kWh`);
+        list(x.extra).forEach((e) => cl.push(this._extra(e)));
+        const k = 'c' + j;
+        B[k] = { label: x.name || `${t.loads} ${j + 1}`, color: x.color || C.loads, value: this._num0(p), unit: 'W',
+          lines: cl, cons: true, e: tap(x, list(x.power)[0] || list(c.loads.power)[0]) };
+        F[k] = p;
+      });
 
       // battery (+ = charging)
       let bat = NaN;
@@ -279,7 +315,8 @@
 
     // ---------------------------------------------------------------- layout
     _layout(mode, B) {
-      const P = LAYOUTS[mode];
+      const ck = Object.keys(B).filter((k) => B[k].cons);
+      const P = mode === 'landscape' && ck.length ? LAYOUTS.landscape4 : LAYOUTS[mode];
       const pos = {};
       let y = 0;
       P.rows.forEach((row) => {
@@ -288,8 +325,83 @@
         const h = Math.max(...keys.map((k) => boxH(B[k].lines.length)));
         row.forEach((k, idx) => { if (B[k]) pos[k] = { x: P.cols[idx], y, w: P.bw, h }; });
         y += h + P.gap;
+        // portrait: consumers side by side under the loads box, from the inverter-battery line to the card edge;
+        // rows of CONS_PER_ROW, right-aligned (the last consumer sits right under the loads box)
+        if (mode === 'portrait' && ck.length && row.includes('loads')) {
+          y += CONS_FIRST - P.gap;
+          const x0 = P.cols[0] + P.bw / 2 + CONS_GAP;
+          const w = (P.W - x0 - CONS_GAP * (CONS_PER_ROW - 1)) / CONS_PER_ROW;
+          for (let r = 0; r < ck.length; r += CONS_PER_ROW) {
+            const rk = ck.slice(r, r + CONS_PER_ROW);
+            const hc = Math.max(...rk.map((k) => boxH(B[k].lines.length)));
+            rk.forEach((k, j) => { pos[k] = { x: P.W - (rk.length - j) * (w + CONS_GAP) + CONS_GAP, y, w, h: hc, row: r / CONS_PER_ROW }; });
+            y += hc + CONS_GAP;
+          }
+          y += P.gap - CONS_GAP;
+        }
       });
-      return { W: P.W, H: y - P.gap, pos };
+      let H = y - P.gap;
+      // landscape: consumers stacked in the 4th column
+      if (mode === 'landscape' && ck.length) {
+        let yc = 0;
+        ck.forEach((k) => {
+          const hc = boxH(B[k].lines.length);
+          pos[k] = { x: P.cols[3], y: yc, w: P.bw, h: hc };
+          yc += hc + CONS_GAP;
+        });
+        H = Math.max(H, yc - CONS_GAP);
+      }
+      return { W: P.W, H, pos, mode };
+    }
+
+    // one line per consumer from the loads box (no shared bus)
+    _consPaths(L, keys) {
+      const a = L.pos.loads, out = {};
+      if (!a) return out;
+      const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+      if (L.mode === 'portrait') {
+        const y0 = a.y + a.h, yb = y0 + CONS_FIRST / 2;
+        keys.forEach((k) => {
+          const b = L.pos[k]; if (!b) return;
+          const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+          if (!b.row) {
+            const ax = clamp(cx, a.x + 24, a.x + a.w - 24);
+            const inv = L.pos.inverter;
+            const gx = inv ? (inv.x + inv.w + a.x) / 2 : NaN; // middle of the gap between inverter and loads
+            if (ax === cx) {
+              // under the loads box: straight down
+              out[k] = { d: `M${cx},${y0} L${cx},${b.y}`, len: b.y - y0 };
+            } else if (gx > b.x + 8 && gx < b.x + b.w - 8 && a.x > gx) {
+              // left of the loads box: into its left side (below the inverter line), up the gap, rounded corner
+              const R = CORNER_R, ey = a.y + a.h - 16;
+              out[k] = { d: `M${a.x},${ey} L${gx + R},${ey} A${R},${R} 0 0 0 ${gx},${ey + R} L${gx},${b.y}`,
+                len: (a.x - gx - R) + (b.y - ey - R) + Math.PI * R / 2 };
+            } else {
+              out[k] = { d: `M${ax},${y0} L${ax},${yb} L${cx},${yb} L${cx},${b.y}`, len: (yb - y0) + Math.abs(cx - ax) + (b.y - yb) };
+            }
+          } else {
+            // further rows: down the gap between the columns, then sideways into the box
+            const right = b.x + b.w + CONS_GAP / 2 <= a.x + a.w;
+            const gx = right ? b.x + b.w + CONS_GAP / 2 : b.x - CONS_GAP / 2;
+            const ex = right ? b.x + b.w : b.x;
+            out[k] = { d: `M${gx},${y0} L${gx},${cy} L${ex},${cy}`, len: (cy - y0) + CONS_GAP / 2 };
+          }
+        });
+        return out;
+      }
+      const x0 = a.x + a.w;
+      let prev = -Infinity;
+      keys.forEach((k, i) => {
+        const b = L.pos[k]; if (!b) return;
+        const cy = b.y + b.h / 2;
+        let ay = clamp(cy, a.y + HDR_H + 8, a.y + a.h - 8);
+        if (ay < prev + 10) ay = Math.min(prev + 10, a.y + a.h - 4);
+        prev = ay;
+        const mx = x0 + (b.x - x0) * (i + 1) / (keys.length + 1);
+        out[k] = ay === cy ? { d: `M${x0},${cy} L${b.x},${cy}`, len: b.x - x0 }
+          : { d: `M${x0},${ay} L${mx},${ay} L${mx},${cy} L${b.x},${cy}`, len: (b.x - x0) + Math.abs(cy - ay) };
+      });
+      return out;
     }
 
     _path(a, b) {
@@ -314,12 +426,20 @@
         this._flows.push({ k, d: p.d, len: p.len, col });
         lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" stroke="${col}"/><g data-dots="${k}"></g>`;
       });
+      const ck = Object.keys(B).filter((k) => B[k].cons);
+      const cp = this._consPaths(L, ck);
+      ck.filter((k) => cp[k]).forEach((k) => {
+        const p = cp[k];
+        const col = B[k].color;
+        this._flows.push({ k, d: p.d, len: p.len, col });
+        lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" stroke="${esc(col)}"/><g data-dots="${k}"></g>`;
+      });
       Object.entries(L.pos).forEach(([k, p]) => {
         defs += `<clipPath id="c-${k}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/></clipPath>`;
         boxes += `<g><rect class="bg" data-e="${esc(B[k].e || '')}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/>`
           + (this._cfg.header_style === 'bar'
-            ? `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${B[k].color}" clip-path="url(#c-${k})"/>`
-            : `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${B[k].color}" clip-path="url(#c-${k})"/>`)
+            ? `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`
+            : `<rect x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`)
           + `<g data-box="${k}"></g></g>`;
       });
       const title = this._cfg.title ? `<div class="title">${esc(this._cfg.title)}</div>` : '';

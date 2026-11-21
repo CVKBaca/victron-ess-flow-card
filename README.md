@@ -66,9 +66,13 @@ inverter:
   mode: sensor.ess_mode
 loads:
   power: [sensor.ac_loads_l1_power, sensor.ac_loads_l2_power, sensor.ac_loads_l3_power]
-  details:
-    - name: EV
+  today: sensor.ac_loads_energy_today
+  consumers:
+    - name: EV charger
       power: sensor.ev_charger_power
+      today: sensor.ev_charger_energy_today
+      color: '#8E6CCF'
+    - name: House          # no power -> the rest (loads − other consumers)
 battery:
   power: sensor.battery_power
   soc: sensor.battery_soc
@@ -120,7 +124,9 @@ Common options for `grid`, `inverter`, `loads` and `battery`:
 | | `invert_dc` | – | `true` flips the sign of `dc_power` |
 | | `mode` | – | Extra line with a mode / strategy entity |
 | `loads` | `power` | yes | AC loads power (entity or list) |
-| | `details` | – | Extra lines: list of `{name, power}` (e.g. EV charger) |
+| | `today` | – | Today's energy (kWh), shown as a line in the box |
+| | `consumers` | – | Boxes fed from the AC loads, each with its own animated line (see below) |
+| | `details` | – | Extra lines: list of `{name, power}` |
 | `battery` | `power` | – | Battery power, + = charging |
 | | `soc` | – | State of charge (%) — main value |
 | | `voltage`, `current` | – | Shown next to the power |
@@ -129,6 +135,13 @@ Common options for `grid`, `inverter`, `loads` and `battery`:
 `dc_sources` and `ac_sources` are lists of PV sources. Each item is an entity id or
 `{name, power, today}` (`power` may be a list, `today` is the daily yield in kWh).
 Sources are summed in one box; each source gets its own line.
+
+`loads.consumers` is a list of boxes fed from the AC loads (e.g. EV charger, house). Each item:
+`name`, `power` (entity or list), `today` (kWh), `color`, `extra`, `tap_entity`.
+The first consumer **without `power`** shows the rest: loads − other consumers (and, if it has no `today` but
+`loads.today` is set, loads today − other consumers today).
+Portrait: consumers sit side by side under the AC loads box (two per row); the last one is right under it.
+Landscape: consumers are stacked in a 4th column.
 
 Power entities may be in W or kW (converted by `unit_of_measurement`).
 

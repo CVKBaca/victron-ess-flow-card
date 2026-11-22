@@ -3,7 +3,7 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.7.0';
+  const VERSION = '0.8.0';
   const TAG = 'victron-ess-flow-card';
   const LS_KEY = `${TAG}:view`; // view chosen with the toggle, remembered per device (browser)
 
@@ -138,6 +138,7 @@
     .ln { fill: none; stroke: var(--divider-color, rgba(127,127,127,.25)); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
     .la { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity .4s; }
     .la.on { opacity: .35; }
+    .fl { fill: var(--primary-text-color); font-size: 20px; font-weight: 700; }
     text { pointer-events: none; }
     /* halo in the box color: graph lines break around the texts, which stay readable over the graphs */
     .val, .sub, .th, .tc { paint-order: stroke; stroke: var(--secondary-background-color, #282828); stroke-width: 3px;
@@ -772,6 +773,16 @@
         const col = mono ? 'var(--primary-text-color)' : { grid: C.grid, out: C.loads, ac: C.ac, dcbus: C.battery, dc: C.dc }[k];
         this._flows.push({ k, d: p.d, len: p.len, col });
         lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" style="stroke:${esc(col)}"/><g data-dots="${k}"></g>`;
+        // flow_labels: power next to the inverter-battery line (left of a vertical line, above a horizontal one)
+        if (k === 'dcbus' && this._cfg.flow_labels) {
+          const pa = L.pos[a], pb = L.pos[b], vert = pa.y !== pb.y;
+          const lx = vert ? pa.x + pa.w / 2 - 8 : (Math.min(pa.x + pa.w, pb.x + pb.w) + Math.max(pa.x, pb.x)) / 2;
+          const ly = vert ? (Math.min(pa.y + pa.h, pb.y + pb.h) + Math.max(pa.y, pb.y)) / 2 : pa.y + pa.h / 2 - 8;
+          // the direction mark is the mdi:menu-down shape (glyphs like ▼ come from fallback fonts of varying weight)
+          lines += `<text class="fl" data-fl="${k}" x="${lx}" y="${ly}" text-anchor="${vert ? 'end' : 'middle'}" `
+            + `dominant-baseline="${vert ? 'central' : 'auto'}" data-v="${vert ? 1 : 0}"></text>`
+            + `<path class="fl" data-fa="${k}" d="M-6.5,-3.25L0,3.25L6.5,-3.25Z"/>`;
+        }
       });
       const ck = Object.keys(B).filter((k) => B[k].cons);
       const cp = this._consPaths(L, ck);
@@ -1112,6 +1123,24 @@
         const la = root.querySelector(`[data-la="${f.k}"]`);
         la.classList.toggle('on', on);
         la.style.stroke = col;
+        // flow_labels: value in the text color like the box values, a triangle pointing along the dots; hidden while idle
+        const fl = root.querySelector(`[data-fl="${f.k}"]`), fa = root.querySelector(`[data-fa="${f.k}"]`);
+        if (fl) {
+          fl.style.display = fa.style.display = on ? '' : 'none';
+          fl.innerHTML = on ? `${esc(this._f(Math.round(Math.abs(p))))}<tspan class="u" dx="4">W</tspan>` : '';
+          if (on) {
+            const v = fl.dataset.v === '1', x = +fl.getAttribute('x'), y = +fl.getAttribute('y');
+            // size of the smaller box values; smaller when it does not fit left of the line (triangle 13 + gap 7 + margin 5)
+            fl.style.fontSize = '';
+            let w = fl.getComputedTextLength();
+            if (v && w > 0 && x - w - 25 < 0) {
+              fl.style.fontSize = `${Math.max(14, Math.floor(20 * (x - 25) / w))}px`;
+              w = fl.getComputedTextLength();
+            }
+            fa.setAttribute('transform', v ? `translate(${x - w - 13.5},${y}) rotate(${p > 0 ? 0 : 180})`
+              : `translate(${x - w / 2 - 13.5},${y - 5}) rotate(${p > 0 ? -90 : 90})`);
+          }
+        }
         if (this._flowQ[f.k] === q) return;
         this._flowQ[f.k] = q;
         let s = '';

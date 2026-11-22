@@ -111,6 +111,7 @@ ac_label: Solar AC
 | `layout` | `auto` | `auto`, `portrait` or `landscape` |
 | `scale` | `fit` | `fit` = the drawing is scaled to the card width (texts grow with wide cards); `native` = drawn 1:1 at the card width, so texts keep the sizes of other cards (11 / 26 / 12 px) and the boxes get wider instead |
 | `min_flow` | `10` | Below this power (W) a line is shown as idle |
+| `flow_labels` | `false` | Power next to the inverter–battery line, styled like the box values, with a triangle in the direction of the flow (down = into the battery, up = out of it); hidden while the line is idle |
 | `header_style` | `bar` | `bar` = colored header bar with the box title, `stripe` = colored stripe on the left |
 | `color_mode` | `color` | `color` = colored boxes, flows and graphs; `mono` = shades of the theme text color only; `accent` = mono with energy colors as accents (see [Color modes](#color-modes)) |
 | `icon` | – | Icon in a circle left of the card title, e.g. `mdi:home-lightning-bolt-outline` |

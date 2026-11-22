@@ -3,7 +3,7 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.5.0';
+  const VERSION = '0.6.0';
   const TAG = 'victron-ess-flow-card';
   const LS_KEY = `${TAG}:view`; // view chosen with the toggle, remembered per device (browser)
 
@@ -137,6 +137,11 @@
     .chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .chip:hover { background-color: rgba(127,127,127,.2); }
     .chip ha-icon { --mdc-icon-size: 16px; flex: none; }
+    /* color_mode: mono — shades of the theme text color (flat gray header, plain footer, gray boxes and flows) */
+    .hdr.mono { background: color-mix(in srgb, var(--primary-text-color) 12%, transparent); color: var(--primary-text-color);
+      box-shadow: inset 0 -1px 0 var(--divider-color, rgba(127,127,127,.25)); }
+    .ftr.mono { background: var(--secondary-background-color, #282828); color: var(--secondary-text-color); box-shadow: none; }
+    .hl { fill: var(--divider-color, rgba(127,127,127,.25)); }
     .gr { pointer-events: none; }
     .gra { stroke: none; fill-opacity: .2; }
     .grl { fill: none; stroke-width: 1.5; stroke-opacity: .55; stroke-linejoin: round; }
@@ -166,6 +171,7 @@
       const src = (a) => list(a).map((s) => (typeof s === 'string' ? { power: s } : s)).filter((s) => s && s.power);
       this._cfg = Object.assign({ layout: 'auto', min_flow: 10 }, cfg, {
         header_style: cfg.header_style === 'stripe' ? 'stripe' : 'bar',
+        color_mode: cfg.color_mode === 'mono' ? 'mono' : 'color',
         dc_sources: src(cfg.dc_sources), ac_sources: src(cfg.ac_sources),
         consumers: list(cfg.loads.consumers).map((x) => (typeof x === 'string' ? { power: x } : x)).filter(Boolean),
         colors: Object.assign({}, COLORS, cfg.colors || {}),
@@ -234,6 +240,15 @@
 
     getCardSize() { return 6; }
     getGridOptions() { return { columns: 12, min_columns: 6 }; }
+
+    // color_mode: mono — no box / flow / graph colors, gray shades of the theme text color
+    _mono() { return this._cfg.color_mode === 'mono'; }
+    // fill of the box header element (bar: header bar, stripe: left stripe); mono: flat gray
+    _hbFill(b) {
+      if (b.alert) return ALERT;
+      if (!this._mono()) return b.color;
+      return this._cfg.header_style === 'bar' ? 'url(#vefc-hg)' : 'url(#vefc-st)';
+    }
 
     // ---------------------------------------------------------------- values
     _so(e) { return e && this._hass ? this._hass.states[e] : undefined; }
@@ -505,9 +520,21 @@
     }
 
     // ---------------------------------------------------------------- layout
+    // scale: native — the drawing is as wide as the card (1 unit = 1 px), so texts keep their CSS sizes
+    // (11 / 26 / 12 px like other cards); box width follows the card width, gaps between columns stay
+    _nativeLayout(P0) {
+      const W = (this.clientWidth || this.getBoundingClientRect().width || 0) - 24 - 4; // ha-card padding, viewBox margin
+      // portrait: narrower gap between the two columns (wider boxes, still room for the line and its dots)
+      const n = P0.cols.length, hg = n === 2 ? 40 : P0.cols[1] - P0.bw;
+      const bw = Math.floor((W - (n - 1) * hg) / n);
+      if (bw < 110) return P0;
+      return Object.assign({}, P0, { W, bw, cols: P0.cols.map((_, i) => i * (bw + hg)) });
+    }
+
     _layout(mode, B) {
       const ck = Object.keys(B).filter((k) => B[k].cons);
-      const P = mode === 'landscape' && ck.length ? LAYOUTS.landscape4 : LAYOUTS[mode];
+      const P0 = mode === 'landscape' && ck.length ? LAYOUTS.landscape4 : LAYOUTS[mode];
+      const P = this._cfg.scale === 'native' ? this._nativeLayout(P0) : P0;
       const pos = {};
       let y = 0;
       P.rows.forEach((row) => {
@@ -607,31 +634,38 @@
     }
 
     _build(L, B) {
-      const C = this._cfg.colors;
-      let defs = '', boxes = '', lines = '';
+      const C = this._cfg.colors, mono = this._mono(), bar = this._cfg.header_style === 'bar';
+      // mono: flows in the theme text color; header bar 12 %, left stripe 20 % of it (paint servers, so the theme
+      // variable works in the fill)
+      const paint = (id, op) => `<linearGradient id="${id}"><stop offset="0" style="stop-color:var(--primary-text-color);stop-opacity:${op}"/></linearGradient>`;
+      let defs = mono ? paint('vefc-hg', 0.12) + paint('vefc-st', 0.2) : '';
+      let boxes = '', lines = '';
       this._flows = [];
       FLOWS.forEach(([a, b, k]) => {
         if (!L.pos[a] || !L.pos[b]) return;
         const p = this._path(L.pos[a], L.pos[b]);
-        const col = { grid: C.grid, out: C.loads, ac: C.ac, dcbus: C.battery, dc: C.dc }[k];
+        const col = mono ? 'var(--primary-text-color)' : { grid: C.grid, out: C.loads, ac: C.ac, dcbus: C.battery, dc: C.dc }[k];
         this._flows.push({ k, d: p.d, len: p.len, col });
-        lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" stroke="${col}"/><g data-dots="${k}"></g>`;
+        lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" style="stroke:${esc(col)}"/><g data-dots="${k}"></g>`;
       });
       const ck = Object.keys(B).filter((k) => B[k].cons);
       const cp = this._consPaths(L, ck);
       ck.filter((k) => cp[k]).forEach((k) => {
         const p = cp[k];
-        const col = B[k].color;
+        const col = mono ? 'var(--primary-text-color)' : B[k].color;
         this._flows.push({ k, d: p.d, len: p.len, col });
-        lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" stroke="${esc(col)}"/><g data-dots="${k}"></g>`;
+        lines += `<path class="ln" d="${p.d}"/><path class="la" data-la="${k}" d="${p.d}" style="stroke:${esc(col)}"/><g data-dots="${k}"></g>`;
       });
       Object.entries(L.pos).forEach(([k, p]) => {
         defs += `<clipPath id="c-${k}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/></clipPath>`;
+        const hf = esc(this._hbFill(B[k]));
         boxes += `<g><rect class="bg" data-e="${esc(B[k].e || '')}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/>`
-          + (this._cfg.header_style === 'bar'
-            ? `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`
-            : `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${esc(B[k].color)}" clip-path="url(#c-${k})"/>`)
-          + (this._graphs[k] && this._graphsOn() ? this._graphEl(k, B[k].color) : '')
+          + (bar
+            ? `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${hf}" clip-path="url(#c-${k})"/>`
+            : `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${hf}" clip-path="url(#c-${k})"/>`)
+          // mono + bar: divider under the header
+          + (mono && bar ? `<rect class="hl" x="${p.x}" y="${p.y + HDR_H}" width="${p.w}" height="1"/>` : '')
+          + (this._graphs[k] && this._graphsOn() ? this._graphEl(k, mono ? 'var(--secondary-text-color)' : B[k].color) : '')
           + `<g data-box="${k}"></g></g>`;
       });
       // header: title (left) and the view toggle (right)
@@ -639,10 +673,10 @@
       const tog = hasTog ? `<button class="tg" title="${esc(D ? this._t.compact : this._t.detail)}" `
         + `aria-label="${esc(D ? this._t.compact : this._t.detail)}"><svg viewBox="0 0 24 24"><path d="${D ? ICON_LESS : ICON_MORE}"/></svg></button>` : '';
       // header text: colors.header_text, or white unless the bar is light
-      const hc = this._cfg.colors.header, bar = this._cfg.header_style === 'bar';
+      const hc = this._cfg.colors.header;
       const ht = this._cfg.colors.header_text || onColor(hc, TEXT_L);
       const hdr = this._cfg.title || hasTog
-        ? `<div class="hdr${bar ? '' : ' stripe'}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
+        ? `<div class="hdr${bar ? '' : ' stripe'}${mono ? ' mono' : ''}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
           + `<div class="title">${esc(this._cfg.title || '')}</div>${tog}</div>` : '';
       this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${hdr}`
         + `<svg viewBox="-2 -2 ${L.W + 4} ${L.H + 4}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${lines}${boxes}</svg>${this._footerEl()}</ha-card>`;
@@ -666,7 +700,7 @@
       if (!f.length) return '';
       const hc = this._cfg.colors.header, bar = this._cfg.header_style === 'bar';
       const ht = this._cfg.colors.header_text || onColor(hc, TEXT_L);
-      return `<div class="ftr${bar ? '' : ' stripe'}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
+      return `<div class="ftr${bar ? '' : ' stripe'}${this._mono() ? ' mono' : ''}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
         + `${f.map((x, i) => `<button class="chip" data-ent="${esc(x.entity)}">`
         + `${x.icon ? `<ha-icon icon="${esc(x.icon)}"></ha-icon>` : ''}<span data-ft="${i}"></span></button>`).join('')}</div>`;
     }
@@ -680,9 +714,9 @@
     // ---------------------------------------------------------------- graphs
     _graphEl(k, color) {
       const C = this._cfg.colors, g = this._graphs[k];
-      const pair = (sfx, col) => `<path class="gra" data-gra${sfx}="${k}" fill="${esc(col)}"/><path class="grl" data-grl${sfx}="${k}" stroke="${esc(col)}"/>`;
-      // colors.<box>_graph overrides the graph color (grid: both import and export)
-      const gc = C[k + '_graph'];
+      const pair = (sfx, col) => `<path class="gra" data-gra${sfx}="${k}" style="fill:${esc(col)}"/><path class="grl" data-grl${sfx}="${k}" style="stroke:${esc(col)}"/>`;
+      // colors.<box>_graph overrides the graph color (grid: both import and export); mono: one gray for all
+      const gc = this._mono() ? color : C[k + '_graph'];
       return `<g class="gr" clip-path="url(#c-${k})">${g.bi ? pair('', gc || C.import) + pair('2', gc || C.export) : pair('', gc || color)}</g>`;
     }
     _unitK(id) { return ((this._so(id) || {}).attributes || {}).unit_of_measurement === 'kW' ? 1000 : 1; }
@@ -829,22 +863,23 @@
       if (!force && sig === this._sig) return;
       this._sig = sig;
       const { B, F } = this._model();
-      const key = mode + '|' + this._view + '|' + Object.keys(B).map((k) => k + boxH(B[k].lines)).join(',');
       const L = this._layout(mode, B);
+      const key = mode + '|' + this._view + '|' + L.W + '|' + Object.keys(B).map((k) => k + boxH(B[k].lines)).join(',');
       if (key !== this._key) { this._build(L, B); this._key = key; }
       const root = this.shadowRoot;
 
       // texts (bar: title in the header bar, content moved up a little)
-      const bar = this._cfg.header_style === 'bar';
+      const bar = this._cfg.header_style === 'bar', mono = this._mono();
       const yL = bar ? 15 : 24, yV = bar ? 52 : 56, yS = bar ? 74 : 78;
       Object.entries(L.pos).forEach(([k, p]) => {
         const b = B[k], x = p.x + (bar ? 12 : 16), mx = p.w - (bar ? 22 : 26);
-        const vc = b.valueColor ? ` style="fill:${b.valueColor}"` : '';
+        const vc = b.valueColor && !mono ? ` style="fill:${b.valueColor}"` : '';
         const small = b.unit === '' && String(b.value).length > 10 ? ' small' : '';
-        // box title color: configured (colors.<box>_text, consumer text_color), else white / dark by the header color
-        const tc = b.textColor || this._cfg.colors[k + '_text'];
+        // box title color: configured (colors.<box>_text, consumer text_color), else white / dark by the header color;
+        // mono: theme text color
+        const tc = mono ? 'var(--primary-text-color)' : b.textColor || this._cfg.colors[k + '_text'];
         const hb = root.querySelector(`[data-hb="${k}"]`);
-        if (hb) hb.setAttribute('fill', b.alert ? ALERT : b.color);
+        if (hb) hb.setAttribute('fill', this._hbFill(b));
         const lc = b.alert && bar ? ' style="fill:#fff"' : bar || tc ? ` style="fill:${esc(tc || onColor(b.color, TEXT_L))}"` : '';
         let s = `<text class="lbl" data-lblk="${k}" x="${x}" y="${p.y + yL}"${lc} data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
         // header_extra: right-aligned in the box header
@@ -902,7 +937,7 @@
           const n = Math.max(2, Math.round(f.len / 28));
           const kp = p > 0 ? '0;1' : '1;0';
           for (let j = 0; j < n; j++) {
-            s += `<circle r="3.5" fill="${f.col}"><animateMotion dur="${dur}s" begin="-${(j * dur / n).toFixed(2)}s" `
+            s += `<circle r="3.5" style="fill:${esc(f.col)}"><animateMotion dur="${dur}s" begin="-${(j * dur / n).toFixed(2)}s" `
               + `repeatCount="indefinite" path="${f.d}" keyPoints="${kp}" keyTimes="0;1" calcMode="linear"/></circle>`;
           }
         }

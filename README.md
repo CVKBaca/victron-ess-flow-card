@@ -18,6 +18,7 @@ Grid ──── Inverter/charger ──── AC loads ──── AC-coupled
 - Lines run the full length between boxes; moving dots show direction, their speed follows the power.
 - Portrait (2 × 3) or landscape (3 × 2) layout, switched automatically by card width (≥ 560 px → landscape).
 - Colors follow your Home Assistant theme; texts in English or Slovak (by HA language).
+- Colored or monochrome (`color_mode: mono`, shades of gray from the theme) to fit a calm dashboard.
 - Every value is a single entity or a list of entities (e.g. three phases), which are summed.
 - Tap a box to open the more-info dialog.
 - Compact or detailed view (per-phase V · A · W tables, PV strings, extra lines), switched by an icon in the card header.
@@ -107,9 +108,11 @@ ac_label: Solar AC
 |---|---|---|
 | `title` | – | Card title, shown in the card header (styled like the box headers, `header_style` applies) left of the view toggle |
 | `layout` | `auto` | `auto`, `portrait` or `landscape` |
+| `scale` | `fit` | `fit` = the drawing is scaled to the card width (texts grow with wide cards); `native` = drawn 1:1 at the card width, so texts keep the sizes of other cards (11 / 26 / 12 px) and the boxes get wider instead |
 | `min_flow` | `10` | Below this power (W) a line is shown as idle |
 | `header_style` | `bar` | `bar` = colored header bar with the box title, `stripe` = colored stripe on the left |
-| `colors` | built-in | Override colors: `grid`, `import`, `export`, `inverter`, `loads`, `battery`, `dc`, `ac`, `header` (card header). Title text colors: `header_text`, `grid_text`, `inverter_text`, `loads_text`, `battery_text`, `dc_text`, `ac_text` (default: white, dark on light colors). Graph colors: `grid_graph`, `loads_graph`, `battery_graph`, `dc_graph`, `ac_graph` (default: the box color; grid: `import` / `export`) |
+| `color_mode` | `color` | `color` = colored boxes, flows and graphs; `mono` = shades of the theme text color only (see [Monochrome mode](#monochrome-mode)) |
+| `colors` | built-in | Override colors (`color_mode: color`): `grid`, `import`, `export`, `inverter`, `loads`, `battery`, `dc`, `ac`, `header` (card header). Title text colors: `header_text`, `grid_text`, `inverter_text`, `loads_text`, `battery_text`, `dc_text`, `ac_text` (default: white, dark on light colors). Graph colors: `grid_graph`, `loads_graph`, `battery_graph`, `dc_graph`, `ac_graph` (default: the box color; grid: `import` / `export`) |
 | `dc_label` | `Solar DC` | Title of the DC-coupled PV box |
 | `ac_label` | `Solar AC` | Title of the AC-coupled PV box |
 | `graphs` | – | Background graphs of today (from 00:00) in the boxes: list of `dc`, `ac`, `battery`, `loads`, `grid` (see [Graphs](#graphs)) |
@@ -245,6 +248,28 @@ loads:
       detail:
         - entity: sensor.ev_charger_set_current
           name: Set
+```
+
+### Monochrome mode
+
+`color_mode: mono` draws the card in shades of the theme text color, for dashboards that keep color for the values
+only (or not at all):
+
+- card header: flat light gray (12 % of the text color) with a divider line; footer: plain secondary background with
+  gray text
+- boxes: header bar in the same gray with a divider line (with `header_style: stripe` a gray stripe on the left instead)
+- values, flow lines, moving dots and background graphs in gray
+- alerts stay red
+
+The shades are derived from `--primary-text-color` / `--secondary-text-color`, so the mode works with light and dark
+themes. `colors` are ignored in this mode.
+
+With `scale: native` the boxes also match the size of text in tiles built with other cards (e.g. button-card):
+
+```yaml
+type: custom:victron-ess-flow-card
+color_mode: mono
+scale: native
 ```
 
 ## Credits

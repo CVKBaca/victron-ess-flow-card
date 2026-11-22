@@ -3,7 +3,7 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.6.0';
+  const VERSION = '0.7.0';
   const TAG = 'victron-ess-flow-card';
   const LS_KEY = `${TAG}:view`; // view chosen with the toggle, remembered per device (browser)
 
@@ -12,11 +12,13 @@
       grid: 'Grid', inverter: 'Inverter', loads: 'AC loads', battery: 'Battery', dc: 'Solar DC', ac: 'Solar AC',
       import: 'Import', export: 'Export', idle: 'Idle', output: 'Output', charging: 'Charging',
       discharging: 'Discharging', today: 'Today', position: 'Position', voltage: 'Voltage', current: 'Current', detail: 'Detailed view', compact: 'Compact view',
+      other: 'Other', balance: 'Balance today', selfsuff: 'Self-sufficiency', src_pv: 'PV', src_bat: 'Bat.', src_grid: 'Grid', peak: 'Peak today',
     },
     sk: {
       grid: 'Sieť', inverter: 'Menič', loads: 'Spotreba', battery: 'Batéria', dc: 'FV – DC', ac: 'FV – AC',
       import: 'Odber', export: 'Dodávka', idle: 'Bez toku', output: 'Výstup', charging: 'Nabíja',
       discharging: 'Vybíja', today: 'Dnes', position: 'Pozícia', voltage: 'Napätie', current: 'Prúd', detail: 'Detailné zobrazenie', compact: 'Kompaktné zobrazenie',
+      other: 'Ostatné', balance: 'Bilancia dnes', selfsuff: 'Sebestačnosť', src_pv: 'FV', src_bat: 'Bat.', src_grid: 'Sieť', peak: 'Max dnes',
     },
   };
   // mdi:unfold-more-horizontal / mdi:unfold-less-horizontal
@@ -40,6 +42,11 @@
     const k = s.toLowerCase().replace(/passthrough/, 'passthru').replace(/[\s-]+/g, '_');
     return VEBUS.en[k] ? k : null;
   };
+
+  // color_mode: accent = mono + this palette (energy colors common in the community: yellow PV, blue battery,
+  // Victron blue inverter, red-orange import, green export, cyan loads), lines under the box titles, filled inverter
+  const ACCENT = { dc: '#FDD835', ac: '#FDD835', battery: '#64B5F6', import: '#FF7043', export: '#66BB6A',
+    loads: '#26C6DA', inverter: '#387DC5' };
 
   const COLORS = {
     grid: '#9FB3C8', import: '#E07A5F', export: '#9FB3C8', inverter: '#387DC5', loads: '#4AB9C1',
@@ -106,6 +113,11 @@
     .hdr { display: flex; align-items: center; gap: 8px; height: 34px; margin: -12px -12px 12px; padding: 0 6px 0 16px;
       background: var(--vefc-hdr); color: var(--vefc-hdr-text); }
     .hdr.stripe { background: none; color: var(--secondary-text-color); box-shadow: inset 4px 0 0 var(--vefc-hdr); }
+    /* icon: in a circle left of the title, like button-card headers */
+    .hdr.ic { padding-left: 10px; }
+    .hic { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+      border-radius: 50%; background: rgba(0,0,0,.12); --mdc-icon-size: 20px; }
+    .hdr.mono .hic { background: var(--secondary-background-color, #282828); }
     .title { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tg { flex: none; display: flex; padding: 3px; border: 0; border-radius: 50%; background: none; cursor: pointer;
@@ -127,6 +139,9 @@
     .la { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity .4s; }
     .la.on { opacity: .35; }
     text { pointer-events: none; }
+    /* halo in the box color: graph lines break around the texts, which stay readable over the graphs */
+    .val, .sub, .th, .tc { paint-order: stroke; stroke: var(--secondary-background-color, #282828); stroke-width: 3px;
+      stroke-linejoin: round; }
     /* footer: bar in the style of the header, equal parts split by vertical dividers (tap = more-info) */
     .ftr { display: flex; height: 34px; margin: 12px -12px -12px; background: var(--vefc-hdr); color: var(--vefc-hdr-text); }
     .ftr.stripe { background: none; color: var(--primary-text-color); box-shadow: inset 0 1px 0 var(--divider-color, rgba(127,127,127,.25)); }
@@ -137,6 +152,7 @@
     .chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .chip:hover { background-color: rgba(127,127,127,.2); }
     .chip ha-icon { --mdc-icon-size: 16px; flex: none; }
+    .chip ha-icon.tgl { --mdc-icon-size: 22px; }
     /* color_mode: mono — shades of the theme text color (flat gray header, plain footer, gray boxes and flows) */
     .hdr.mono { background: color-mix(in srgb, var(--primary-text-color) 12%, transparent); color: var(--primary-text-color);
       box-shadow: inset 0 -1px 0 var(--divider-color, rgba(127,127,127,.25)); }
@@ -145,6 +161,7 @@
     .gr { pointer-events: none; }
     .gra { stroke: none; fill-opacity: .2; }
     .grl { fill: none; stroke-width: 1.5; stroke-opacity: .55; stroke-linejoin: round; }
+    .gz { stroke: var(--secondary-text-color); stroke-opacity: .45; stroke-width: 1; stroke-dasharray: 3 3; }
   `;
 
   class VictronEssFlowCard extends HTMLElement {
@@ -171,12 +188,20 @@
       const src = (a) => list(a).map((s) => (typeof s === 'string' ? { power: s } : s)).filter((s) => s && s.power);
       this._cfg = Object.assign({ layout: 'auto', min_flow: 10 }, cfg, {
         header_style: cfg.header_style === 'stripe' ? 'stripe' : 'bar',
-        color_mode: cfg.color_mode === 'mono' ? 'mono' : 'color',
+        color_mode: cfg.color_mode === 'mono' || cfg.color_mode === 'accent' ? 'mono' : 'color',
+        accent: cfg.color_mode === 'accent',
         dc_sources: src(cfg.dc_sources), ac_sources: src(cfg.ac_sources),
         consumers: list(cfg.loads.consumers).map((x) => (typeof x === 'string' ? { power: x } : x)).filter(Boolean),
         colors: Object.assign({}, COLORS, cfg.colors || {}),
       });
       const c = this._cfg;
+      // accent: defaults on top of mono (each can be overridden)
+      if (c.accent) {
+        c.tint = Object.assign({}, ACCENT, cfg.tint || {});
+        if (cfg.tint_style == null) c.tint_style = 'line';
+        if (cfg.fill == null) c.fill = ['inverter'];
+        if (cfg.fill_opacity == null) c.fill_opacity = 0.8;
+      }
       // background graphs of today: graphs: [dc, ac, battery, loads, grid]
       // (PV = sum of the sources' power, battery = SoC 0-100 %, grid = import above / export below a zero line)
       const gl = list(c.graphs), pw = (arr) => arr.flatMap((x) => list(x.power));
@@ -192,7 +217,10 @@
       [...c.dc_sources, ...c.ac_sources].forEach((s) => ents.push(...list(s.power), s.today, ...list(s.voltage), ...list(s.current)));
       list(c.loads.details).forEach((d) => ents.push(...list(d.power)));
       ents.push(c.loads.today);
-      c.consumers.forEach((x) => ents.push(...list(x.power), x.today, ...list(x.extra).map((e) => e.entity)));
+      if (c.grid.balance) ents.push(c.grid.balance.import, c.grid.balance.export);
+      if (c.loads.self_sufficiency) ents.push(c.loads.self_sufficiency.import);
+      c.consumers.forEach((x) => ents.push(...list(x.power), x.today, ...list(x.extra).map((e) => e.entity),
+        ...list(x.top && x.top.entities).map((e) => (typeof e === 'string' ? e : e && e.entity))));
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => c[k] && list(c[k].extra).forEach((x) => ents.push(x.entity)));
       // detailed view: phase values, PV strings, detail-only lines
       const more = (o) => {
@@ -247,6 +275,12 @@
     _hbFill(b) {
       if (b.alert) return ALERT;
       if (!this._mono()) return b.color;
+      if (b.fill) return 'rgba(0,0,0,0.18)'; // filled box: header a shade darker than the box
+      // tint_style: line — header without a fill (like tiles), the color only in the line under the title
+      if (this._cfg.tint_style === 'line' && this._cfg.header_style === 'bar') return 'transparent';
+      // tinted box: header bar in the tint (tint_header overrides it, e.g. amber for PV: dimmed yellow turns olive)
+      if (b.tint && this._cfg.header_style === 'bar') return b.tintHdr || b.tint;
+      if (b.tint && this._cfg.header_style !== 'bar') return b.tint;
       return this._cfg.header_style === 'bar' ? 'url(#vefc-hg)' : 'url(#vefc-st)';
     }
 
@@ -268,6 +302,8 @@
       if (v == null || Number.isNaN(v)) return '–';
       return new Intl.NumberFormat(this._lang, { minimumFractionDigits: d, maximumFractionDigits: d }).format(v);
     }
+    // energy_decimals: decimals of today's kWh values (default 2)
+    _ed() { const d = this._cfg.energy_decimals; return d === 0 || d ? Math.max(0, Math.min(3, +d)) : 2; }
     _W(v) { return `${this._f(Number.isNaN(v) ? v : Math.round(v))} W`; }
     _num0(v) { return Number.isNaN(v) ? '–' : this._f(Math.round(v)); }
     _phases(ids) { return list(ids).length > 1 ? list(ids).map((e) => this._num0(this._pw(e))).join(' · ') + ' W' : null; }
@@ -299,6 +335,25 @@
       return name ? `${name}: ${v}` : v;
     }
     _detailRows(o) { return o ? list(o.detail).map((x) => this._detailRow(x)).filter(Boolean) : []; }
+
+    // top: {entities: [{entity, name}], count: 5, min: 5} — the biggest measured loads now (detailed view), always
+    // `count` lines (box height stays), then "Other" = the box power minus all measured loads
+    _topRows(top, total) {
+      if (!top || !list(top.entities).length) return [];
+      const n = +top.count || 5, min = top.min != null ? +top.min : 5;
+      const all = list(top.entities).map((e) => (typeof e === 'string' ? { entity: e } : e)).filter((e) => e && e.entity)
+        .map((e) => {
+          const so = this._so(e.entity);
+          return { name: e.name || (so && so.attributes.friendly_name) || e.entity, p: this._pw(e.entity) };
+        });
+      const ok = all.filter((e) => !Number.isNaN(e.p));
+      const shown = ok.filter((e) => e.p >= min).sort((a, b) => b.p - a.p).slice(0, n);
+      const rows = shown.map((e) => `${e.name} ${this._W(e.p)}`);
+      while (rows.length < n) rows.push('');
+      const measured = ok.reduce((s, e) => s + Math.max(0, e.p), 0);
+      if (!Number.isNaN(total)) rows.push(`${this._t.other} ${this._W(Math.max(0, total - measured))}`);
+      return ['', ...rows]; // an empty line separates the list from the lines above
+    }
 
     // detail table: rows [{label, v, a, p}] of entity ids; only configured columns (V, A, W)
     _table(rows, sign = 1) {
@@ -372,6 +427,12 @@
       phases(gl, c.grid, inv(c.grid));
       list(c.grid.extra).forEach((x) => gl.push(this._extra(x)));
       if (D) gl.push(...this._detailRows(c.grid));
+      // grid.balance: {import, export} (today's kWh) -> "Balance today ±x kWh" = export − import (detailed view)
+      const bal = c.grid.balance;
+      if (D && bal && bal.import && bal.export) {
+        const b = this._num(bal.export) - this._num(bal.import);
+        gl.push(`${bal.name || t.balance} ${Number.isNaN(b) ? '–' : (b > 0 ? '+' : '') + this._f(b, this._ed())} kWh`);
+      }
       B.grid = { label: c.grid.name || t.grid, color: C.grid, value: this._num0(Math.abs(grid)), unit: 'W',
         valueColor: idleG ? null : grid > 0 ? C.import : C.export, lines: gl, e: tap(c.grid, list(c.grid.power)[0]) };
       F.grid = grid;
@@ -393,7 +454,7 @@
           // one source: the power is the big value -> line 1 = name · V · A, line 2 = today
           const s = arr[0];
           const p = this._sum(s.power); if (!Number.isNaN(p)) { tot += p; ok = true; }
-          const today = s.today ? `${t.today} ${this._f(this._num(s.today), 2)} kWh` : '';
+          const today = s.today ? `${t.today} ${this._f(this._num(s.today), this._ed())} kWh` : '';
           if (D) {
             // detailed view: one value per line (Position: name, Voltage, Current, Today), then strings and detail rows
             const [v, a] = [list(s.voltage).length ? va({ voltage: s.voltage })[0] : '', list(s.current).length ? va({ current: s.current })[0] : ''];
@@ -407,7 +468,7 @@
         } else {
           lines = arr.flatMap((s) => {
             const p = this._sum(s.power); if (!Number.isNaN(p)) { tot += p; ok = true; }
-            const today = s.today ? `${this._f(this._num(s.today), 2)} kWh` : '';
+            const today = s.today ? `${this._f(this._num(s.today), this._ed())} kWh` : '';
             const out = [`${s.name ? s.name + ' ' : ''}${this._W(p)}${today ? ' · ' + today : ''}`];
             if (D) { const stb = this._stringTable(s); if (stb) out.push(stb); out.push(...this._detailRows(s)); }
             return out;
@@ -426,7 +487,7 @@
       const ll = [];
       phases(ll, c.loads, inv(c.loads));
       const loadToday = c.loads.today ? this._num(c.loads.today) : NaN;
-      if (c.loads.today) ll.push(`${t.today} ${this._f(loadToday, 2)} kWh`);
+      if (c.loads.today) ll.push(`${t.today} ${this._f(loadToday, this._ed())} kWh`);
       list(c.loads.details).forEach((d) => ll.push(`${d.name || d.power} ${this._W(this._sum(d.power))}`));
       list(c.loads.extra).forEach((x) => ll.push(this._extra(x)));
       if (D) ll.push(...this._detailRows(c.loads));
@@ -450,11 +511,12 @@
           if (!x.today && c.loads.today) today = todayOk && !Number.isNaN(loadToday) ? Math.max(0, loadToday - knownToday) : NaN;
         }
         const cl = [];
-        if (x.today || (!list(x.power).length && c.loads.today)) cl.push(`${t.today} ${this._f(today, 2)} kWh`);
+        if (x.today || (!list(x.power).length && c.loads.today)) cl.push(`${t.today} ${this._f(today, this._ed())} kWh`);
         list(x.extra).forEach((e) => cl.push(this._extra(e)));
         if (D) {
           const tb = this._phaseTable(x); if (tb) cl.push(tb);
           cl.push(...this._detailRows(x));
+          cl.push(...this._topRows(x.top, p));
         }
         const k = 'c' + j;
         B[k] = { label: x.name || `${t.loads} ${j + 1}`, color: x.color || C.loads, textColor: x.text_color, value: this._num0(p), unit: 'W',
@@ -481,6 +543,16 @@
           lines: bl, e: tap(b, b.soc || list(b.power)[0]) };
       }
 
+      // loads (detailed view): self_sufficiency: {import} -> today's share not from the grid (1 − import / loads.today)
+      // (loads.sources: after the inverter, it needs the DC bus flow)
+      if (D) {
+        const ss = c.loads.self_sufficiency;
+        if (ss && ss.import && c.loads.today) {
+          const imp = this._num(ss.import);
+          ll.push(`${t.selfsuff} ${loadToday > 0 && !Number.isNaN(imp) ? Math.round(Math.max(0, (1 - imp / loadToday) * 100)) + ' %' : '–'}`);
+        }
+      }
+
       // inverter / charger
       const i = c.inverter;
       const outIds = list(i.power);
@@ -502,6 +574,44 @@
       // DC bus between inverter and battery: + = inverter charges the battery
       F.dcbus = i.dc_power ? this._pw(i.dc_power) * (i.invert_dc ? -1 : 1) : bat - (Number.isNaN(dcT) ? 0 : dcT);
 
+      // loads.sources (detailed view): where the load comes from now. AC-coupled PV sits on AC-out next to the loads and
+      // covers them first; the rest is the inverter output: from the DC side (MPPT first, then the battery) while the
+      // inverter inverts (DC bus towards AC), from the grid (pass-through) while it charges; the grid share is at most
+      // the measured import, the rest (inverter losses, meter mismatch) stays on the DC side
+      if (D && c.loads.sources) {
+        const z = (v) => (Number.isNaN(v) ? 0 : Math.max(0, v));
+        const L0 = z(load), pvAC = Math.min(L0, z(acT)), R = L0 - pvAC;
+        const db = F.dcbus;
+        let fromDC = Number.isNaN(db) ? Math.max(0, R - z(grid)) : db > 0 ? 0 : Math.min(R, -db);
+        const fromGrid = Math.min(R - fromDC, z(grid));
+        fromDC = R - fromGrid;
+        const mppt = Math.min(fromDC, z(dcT)), batP = fromDC - mppt, pvAll = pvAC + mppt;
+        const sum = pvAll + batP + fromGrid;
+        if (sum > 0) {
+          const pc = (v) => Math.round(v / sum * 100);
+          ll.push(`${t.src_pv} ${pc(pvAll)} % · ${t.src_bat} ${pc(batP)} % · ${t.src_grid} ${pc(fromGrid)} %`);
+        } else ll.push('–');
+      }
+      // loads.peak (detailed view): today's highest 5-minute mean of the loads and when (from the graph data)
+      if (D && c.loads.peak) {
+        const d0 = dayStart(), sign = c.loads.invert ? -1 : 1;
+        const es = list(c.loads.power).map((id) => GRAPH_CACHE.get(id)).filter((e) => e && e.day === d0);
+        let best = NaN, bb = -1;
+        if (es.length) {
+          for (let b = 0; b < GRAPH_BINS; b++) {
+            let v = 0, ok = false;
+            es.forEach((e) => { if (!Number.isNaN(e.vals[b])) { v += e.vals[b]; ok = true; } });
+            if (ok && (Number.isNaN(best) || v * sign > best)) { best = v * sign; bb = b; }
+          }
+        }
+        if (bb < 0) ll.push(`${t.peak} –`);
+        else {
+          const tm = new Date(d0 + bb * BIN_MS).toLocaleTimeString(this._lang, { hour: '2-digit', minute: '2-digit' });
+          const val = best >= 1000 ? `${this._f(best / 1000, 1)} kW` : this._W(best);
+          ll.push(`${t.peak} ${val} · ${tm}`);
+        }
+      }
+
       // header_extra: values in the box header, right-aligned (e.g. tariff)
       const hx = (k, o) => { if (B[k] && o) B[k].hx = list(o.header_extra).filter(Boolean).map((x) => this._extra(x)).join(' · '); };
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => hx(k, c[k]));
@@ -516,6 +626,21 @@
       };
       ['grid', 'inverter', 'loads', 'battery'].forEach((k) => al(k, c[k]));
       c.consumers.forEach((x, j) => al('c' + j, x));
+      // mono: accent color per box: tint: {grid, inverter, loads, battery, dc, ac}, consumers: `tint`
+      // (title, divider line and graph in the color; surfaces stay gray, dimmed colors would turn muddy)
+      // grid: tint.import / tint.export follow the direction (idle: tint.grid), and color the graph above / below zero
+      if (this._mono()) {
+        const tn = c.tint || {};
+        Object.keys(B).forEach((k) => {
+          // consumers: their own tint; accent: else the loads color
+          let col = B[k].cons ? c.consumers[+k.slice(1)].tint || (c.accent ? tn.loads : null) : tn[k];
+          if (k === 'grid' && (tn.import || tn.export) && !idleG) col = (grid > 0 ? tn.import : tn.export) || col;
+          if (col) B[k].tint = col;
+          if (col && c.tint_header && c.tint_header[k]) B[k].tintHdr = c.tint_header[k];
+        });
+        // fill: [box, …] — the whole box in its tint color (e.g. the inverter as the center of the flow), white texts
+        list(c.fill).forEach((k) => { if (B[k] && B[k].tint) B[k].fill = true; });
+      }
       return { B, F };
     }
 
@@ -634,7 +759,7 @@
     }
 
     _build(L, B) {
-      const C = this._cfg.colors, mono = this._mono(), bar = this._cfg.header_style === 'bar';
+      const C = this._cfg.colors, mono = this._mono(), bar = this._cfg.header_style === 'bar', tn = this._cfg.tint || {};
       // mono: flows in the theme text color; header bar 12 %, left stripe 20 % of it (paint servers, so the theme
       // variable works in the fill)
       const paint = (id, op) => `<linearGradient id="${id}"><stop offset="0" style="stop-color:var(--primary-text-color);stop-opacity:${op}"/></linearGradient>`;
@@ -659,13 +784,18 @@
       Object.entries(L.pos).forEach(([k, p]) => {
         defs += `<clipPath id="c-${k}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/></clipPath>`;
         const hf = esc(this._hbFill(B[k]));
-        boxes += `<g><rect class="bg" data-e="${esc(B[k].e || '')}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"/>`
+        boxes += `<g><rect class="bg" data-e="${esc(B[k].e || '')}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="12"`
+          // fill_opacity: tone the filled box down (the card background shows through)
+          + `${B[k].fill ? ` style="fill:${esc(B[k].tint)};fill-opacity:${+this._cfg.fill_opacity || 1}"` : ''}/>`
           + (bar
             ? `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="${p.w}" height="${HDR_H}" fill="${hf}" clip-path="url(#c-${k})"/>`
             : `<rect data-hb="${k}" x="${p.x}" y="${p.y}" width="4" height="${p.h}" fill="${hf}" clip-path="url(#c-${k})"/>`)
           // mono + bar: divider under the header
-          + (mono && bar ? `<rect class="hl" x="${p.x}" y="${p.y + HDR_H}" width="${p.w}" height="1"/>` : '')
-          + (this._graphs[k] && this._graphsOn() ? this._graphEl(k, mono ? 'var(--secondary-text-color)' : B[k].color) : '')
+          // (its color follows the tint in _render: the grid tint changes with the direction)
+          + (mono && bar ? `<rect class="hl" data-hl="${k}" x="${p.x}" y="${p.y + HDR_H}" width="${p.w}" height="${this._cfg.tint_style === 'line' ? 2 : 1}"/>` : '')
+          + (this._graphs[k] && this._graphsOn() ? this._graphEl(k, mono ? 'var(--secondary-text-color)' : B[k].color,
+            mono ? (k === 'grid' && tn.import) || tn[k] || B[k].tint : null,
+            mono && k === 'grid' ? tn.export || tn.grid : null) : '')
           + `<g data-box="${k}"></g></g>`;
       });
       // header: title (left) and the view toggle (right)
@@ -676,7 +806,8 @@
       const hc = this._cfg.colors.header;
       const ht = this._cfg.colors.header_text || onColor(hc, TEXT_L);
       const hdr = this._cfg.title || hasTog
-        ? `<div class="hdr${bar ? '' : ' stripe'}${mono ? ' mono' : ''}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
+        ? `<div class="hdr${bar ? '' : ' stripe'}${mono ? ' mono' : ''}${this._cfg.icon ? ' ic' : ''}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
+          + (this._cfg.icon ? `<span class="hic"><ha-icon icon="${esc(this._cfg.icon)}"></ha-icon></span>` : '')
           + `<div class="title">${esc(this._cfg.title || '')}</div>${tog}</div>` : '';
       this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${hdr}`
         + `<svg viewBox="-2 -2 ${L.W + 4} ${L.H + 4}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${lines}${boxes}</svg>${this._footerEl()}</ha-card>`;
@@ -702,22 +833,39 @@
       const ht = this._cfg.colors.header_text || onColor(hc, TEXT_L);
       return `<div class="ftr${bar ? '' : ' stripe'}${this._mono() ? ' mono' : ''}" style="--vefc-hdr:${esc(hc)};--vefc-hdr-text:${esc(ht)}">`
         + `${f.map((x, i) => `<button class="chip" data-ent="${esc(x.entity)}">`
-        + `${x.icon ? `<ha-icon icon="${esc(x.icon)}"></ha-icon>` : ''}<span data-ft="${i}"></span></button>`).join('')}</div>`;
+        + `${x.icon ? `<ha-icon icon="${esc(x.icon)}"></ha-icon>` : this._isToggle(x) ? `<ha-icon class="tgl" data-fi="${i}"></ha-icon>` : ''}`
+        + `<span data-ft="${i}"></span></button>`).join('')}</div>`;
     }
+    // switch / input_boolean in the footer: a toggle icon showing the state, so the chip reads as an action
+    // (tap opens more-info with the toggle — no direct switching by an accidental tap while scrolling)
+    _isToggle(x) { return /^(switch|input_boolean)\./.test(x.entity || ''); }
     _renderFooter() {
+      // on: the inverter accent (mono / accent); color mode: the footer text color (the bar itself is colored)
+      const on = this._mono() ? (this._cfg.tint && this._cfg.tint.inverter) || 'var(--primary-text-color)' : 'currentColor';
       this._footer().forEach((x, i) => {
         const el = this.shadowRoot.querySelector(`[data-ft="${i}"]`);
         if (el) el.textContent = this._extra(x);
+        const ic = this.shadowRoot.querySelector(`[data-fi="${i}"]`);
+        if (ic) {
+          const st = this._st(x.entity) === 'on';
+          ic.setAttribute('icon', st ? 'mdi:toggle-switch' : 'mdi:toggle-switch-off-outline');
+          ic.style.color = st ? on : 'var(--secondary-text-color)';
+        }
       });
     }
 
     // ---------------------------------------------------------------- graphs
-    _graphEl(k, color) {
+    // line: accent color for the line only (mono tint: gray area, stronger colored line — a dimmed color area turns muddy)
+    // line2: line color of the second series (grid: export below zero)
+    _graphEl(k, color, line, line2) {
       const C = this._cfg.colors, g = this._graphs[k];
-      const pair = (sfx, col) => `<path class="gra" data-gra${sfx}="${k}" style="fill:${esc(col)}"/><path class="grl" data-grl${sfx}="${k}" style="stroke:${esc(col)}"/>`;
+      const pair = (sfx, col, ln) => `<path class="gra" data-gra${sfx}="${k}" style="fill:${esc(col)}"/>`
+        + `<path class="grl" data-grl${sfx}="${k}" style="stroke:${esc(ln || col)}${ln ? ';stroke-opacity:.9' : ''}"/>`;
       // colors.<box>_graph overrides the graph color (grid: both import and export); mono: one gray for all
       const gc = this._mono() ? color : C[k + '_graph'];
-      return `<g class="gr" clip-path="url(#c-${k})">${g.bi ? pair('', gc || C.import) + pair('2', gc || C.export) : pair('', gc || color)}</g>`;
+      // grid: faint dashed zero line between import (above) and export (below)
+      return `<g class="gr" clip-path="url(#c-${k})">${g.bi ? pair('', gc || C.import, line) + pair('2', gc || C.export, line2 || line)
+        + `<line class="gz" data-gz="${k}"/>` : pair('', gc || color, line)}</g>`;
     }
     _unitK(id) { return ((this._so(id) || {}).attributes || {}).unit_of_measurement === 'kW' ? 1000 : 1; }
 
@@ -837,20 +985,33 @@
         }
         const X = (b) => (p.x + p.w * (b + 0.5) / GRAPH_BINS).toFixed(1);
         const Y = (v) => Math.max(top, Math.min(bot, base - v * k1)).toFixed(1);
+        // power: no line where nothing flows (|value| < 1 W, e.g. PV at night, grid import while exporting) —
+        // the line and the area are split into segments; SoC is drawn everywhere
         const draw = (sfx, f) => {
           const a = root.querySelector(`[data-gra${sfx}="${k}"]`), l = root.querySelector(`[data-grl${sfx}="${k}"]`);
           if (!a || !l) return;
-          let line = '', first = -1, last = -1;
+          let line = '', area = '', seg = [];
+          const flush = () => {
+            if (!seg.length) return;
+            const pts = seg.map(([b, y]) => `${X(b)},${y}`).join('L');
+            line += `M${pts}`;
+            area += `M${pts}L${X(seg[seg.length - 1][0])},${base.toFixed(1)}L${X(seg[0][0])},${base.toFixed(1)}Z`;
+            seg = [];
+          };
           ser.forEach((v, b) => {
-            if (Number.isNaN(v)) return;
-            line += `${first < 0 ? 'M' : 'L'}${X(b)},${Y(f(v))}`;
-            if (first < 0) first = b;
-            last = b;
+            if (Number.isNaN(v) || (!g.pct && Math.abs(f(v)) < 1)) { flush(); return; }
+            seg.push([b, Y(f(v))]);
           });
+          flush();
           l.setAttribute('d', line);
-          a.setAttribute('d', first < 0 ? '' : `${line}L${X(last)},${base.toFixed(1)}L${X(first)},${base.toFixed(1)}Z`);
+          a.setAttribute('d', area);
         };
-        if (g.bi) { draw('', (v) => Math.max(0, v)); draw('2', (v) => Math.min(0, v)); }
+        if (g.bi) {
+          draw('', (v) => Math.max(0, v)); draw('2', (v) => Math.min(0, v));
+          const z = root.querySelector(`[data-gz="${k}"]`);
+          if (z) ['x1', p.x, 'x2', p.x + p.w, 'y1', base.toFixed(1), 'y2', base.toFixed(1)]
+            .forEach((v, i, a) => { if (i % 2 === 0) z.setAttribute(v, a[i + 1]); });
+        }
         else draw('', (v) => v);
       });
     }
@@ -877,9 +1038,19 @@
         const small = b.unit === '' && String(b.value).length > 10 ? ' small' : '';
         // box title color: configured (colors.<box>_text, consumer text_color), else white / dark by the header color;
         // mono: theme text color
-        const tc = mono ? 'var(--primary-text-color)' : b.textColor || this._cfg.colors[k + '_text'];
+        // mono: titles in the theme text color (the color is carried by the header wash, line and graph)
+        const tc = mono ? (b.fill ? '#fff' : 'var(--primary-text-color)') : b.textColor || this._cfg.colors[k + '_text'];
+        // filled box: white value and lines on the color
+        const fv = b.fill ? ' style="fill:#fff;stroke:none"' : '', fs = b.fill ? ' style="fill:rgba(255,255,255,.85);stroke:none"' : '';
         const hb = root.querySelector(`[data-hb="${k}"]`);
-        if (hb) hb.setAttribute('fill', this._hbFill(b));
+        if (hb) {
+          hb.setAttribute('fill', this._hbFill(b));
+          // tinted header bar: a soft wash of the color (tint_header_opacity, default 0.2)
+          if (mono && bar && b.tint && !b.fill && !b.alert && this._cfg.tint_style !== 'line') hb.setAttribute('fill-opacity', +this._cfg.tint_header_opacity || 0.2);
+          else hb.removeAttribute('fill-opacity');
+        }
+        const hl = root.querySelector(`[data-hl="${k}"]`);
+        if (hl) hl.style.fill = b.fill ? 'rgba(255,255,255,0.35)' : b.tint || '';
         const lc = b.alert && bar ? ' style="fill:#fff"' : bar || tc ? ` style="fill:${esc(tc || onColor(b.color, TEXT_L))}"` : '';
         let s = `<text class="lbl" data-lblk="${k}" x="${x}" y="${p.y + yL}"${lc} data-max="${mx}">${esc(b.label.toLocaleUpperCase(this._lang))}</text>`;
         // header_extra: right-aligned in the box header
@@ -887,21 +1058,22 @@
         const hxt = b.alert || b.hx;
         if (hxt) s += `<text class="lbl" data-hxk="${k}" x="${p.x + p.w - (bar ? 10 : 12)}" y="${p.y + yL}" text-anchor="end"`
           + `${b.alert && !bar ? ` style="fill:${ALERT}"` : lc} font-weight="${b.alert ? 700 : 500}" letter-spacing="0">${esc(hxt)}</text>`;
-        s += `<text class="val${small}" x="${x}" y="${p.y + yV}"${vc} data-max="${mx}">${b.value}`
+        s += `<text class="val${small}" x="${x}" y="${p.y + yV}"${vc || fv} data-max="${mx}">${b.value}`
           + (b.unit ? `<tspan class="u" dx="4">${b.unit}</tspan>` : '') + '</text>';
-        const ong = this._view === 'compact' ? ' ong' : '';
+        // compact view: brighter lines over the graphs; mono: secondary text like other cards (value white, lines gray)
+        const ong = this._view === 'compact' && !mono ? ' ong' : '';
         let off = 0;
         b.lines.forEach((ln) => {
           const y = p.y + yS + off;
           off += itemH(ln);
-          if (typeof ln === 'string') { s += `<text class="sub${ong}" x="${x}" y="${y}" data-max="${mx}">${esc(ln)}</text>`; return; }
+          if (typeof ln === 'string') { s += `<text class="sub${ong}" x="${x}" y="${y}"${fs} data-max="${mx}">${esc(ln)}</text>`; return; }
           // table: units in the header, values right-aligned in columns after the row label
           const lw = 24, cx = (i) => (x + lw + (mx - lw) * (i + 1) / ln.head.length).toFixed(1);
-          ln.head.forEach((h, i) => { s += `<text class="th" x="${cx(i)}" y="${y}" text-anchor="end">${esc(h)}</text>`; });
+          ln.head.forEach((h, i) => { s += `<text class="th" x="${cx(i)}" y="${y}"${fs} text-anchor="end">${esc(h)}</text>`; });
           ln.rows.forEach((r, j) => {
             const ry = y + TR * (j + 1);
-            s += `<text class="th" x="${x}" y="${ry}">${esc(r[0])}</text>`;
-            r.slice(1).forEach((v, i) => { s += `<text class="tc" x="${cx(i)}" y="${ry}" text-anchor="end">${esc(v)}</text>`; });
+            s += `<text class="th" x="${x}" y="${ry}"${fs}>${esc(r[0])}</text>`;
+            r.slice(1).forEach((v, i) => { s += `<text class="tc" x="${cx(i)}" y="${ry}"${fv} text-anchor="end">${esc(v)}</text>`; });
           });
         });
         const g = root.querySelector(`[data-box="${k}"]`);
@@ -923,13 +1095,23 @@
 
       this._renderFooter();
 
-      // animated flows
+      // animated flows (mono + tint: the color of the energy flowing, grid by direction)
+      const tn = this._cfg.tint || {};
+      const fcol = (f, p) => {
+        if (!mono) return f.col;
+        const m = { out: tn.loads, ac: tn.ac, dcbus: tn.battery, dc: tn.dc,
+          grid: p > 0 ? tn.import || tn.grid : tn.export || tn.grid }[f.k] || (B[f.k] && B[f.k].tint);
+        return m || f.col;
+      };
       (this._flows || []).forEach((f) => {
         const p = F[f.k];
         const on = !Number.isNaN(p) && Math.abs(p) >= this._cfg.min_flow;
         const dur = on ? Math.round(Math.max(0.6, Math.min(4, 4.6 - Math.log10(Math.abs(p)))) * Math.sqrt(Math.max(f.len, 20) / 60) * 4) / 4 : 0;
-        const q = on ? (p > 0 ? '+' : '-') + dur : 'off';
-        root.querySelector(`[data-la="${f.k}"]`).classList.toggle('on', on);
+        const col = fcol(f, p);
+        const q = on ? (p > 0 ? '+' : '-') + dur + col : 'off';
+        const la = root.querySelector(`[data-la="${f.k}"]`);
+        la.classList.toggle('on', on);
+        la.style.stroke = col;
         if (this._flowQ[f.k] === q) return;
         this._flowQ[f.k] = q;
         let s = '';
@@ -937,7 +1119,7 @@
           const n = Math.max(2, Math.round(f.len / 28));
           const kp = p > 0 ? '0;1' : '1;0';
           for (let j = 0; j < n; j++) {
-            s += `<circle r="3.5" style="fill:${esc(f.col)}"><animateMotion dur="${dur}s" begin="-${(j * dur / n).toFixed(2)}s" `
+            s += `<circle r="3.5" style="fill:${esc(col)}"><animateMotion dur="${dur}s" begin="-${(j * dur / n).toFixed(2)}s" `
               + `repeatCount="indefinite" path="${f.d}" keyPoints="${kp}" keyTimes="0;1" calcMode="linear"/></circle>`;
           }
         }

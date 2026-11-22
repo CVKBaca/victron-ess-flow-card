@@ -3,7 +3,7 @@
 Animated energy-flow card for Home Assistant, made for Victron ESS systems
 (MultiPlus / Quattro with a battery, MPPT chargers and AC-coupled PV inverters).
 
-<img src="images/screenshot-color.png" alt="Compact view" width="360"> <img src="images/screenshot-detail.png" alt="Detailed view" width="360">
+<img src="images/mode-color.png" alt="Compact view" width="360"> <img src="images/screenshot-detail.png" alt="Detailed view" width="360">
 
 *Compact view with today's graphs and the footer · detailed view (sample data)*
 
@@ -273,7 +273,7 @@ loads:
 
 ### Color modes
 
-<img src="images/screenshot-color.png" alt="color" width="260"> <img src="images/screenshot-mono.png" alt="mono" width="260"> <img src="images/screenshot-accent.png" alt="accent" width="260">
+<img src="images/mode-color.png" alt="color" width="260"> <img src="images/mode-mono.png" alt="mono" width="260"> <img src="images/mode-accent.png" alt="accent" width="260">
 
 *`color` · `mono` · `accent` (sample data)*
 
@@ -294,7 +294,7 @@ grid import red-orange `#FF7043` / export green `#66BB6A` (the grid box follows 
 consumers cyan `#26C6DA`. A colored line under each box title, the flows and dots in the color of the energy
 flowing, graphs with a gray area and a colored line; values stay white. Any color can be changed with `tint`.
 
-<img src="images/screenshot-accent-detail.png" alt="accent, detailed view" width="300">
+<img src="images/mode-accent-detail.png" alt="accent, detailed view" width="300">
 
 *`accent`, detailed view with `top` loads, `grid.balance`, `loads.self_sufficiency`, `sources` and `peak`*
 

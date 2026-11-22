@@ -3,20 +3,20 @@
  *  https://github.com/CVKBaca/victron-ess-flow-card · MIT License
  */
 (() => {
-  const VERSION = '0.8.0';
+  const VERSION = '0.8.1';
   const TAG = 'victron-ess-flow-card';
   const LS_KEY = `${TAG}:view`; // view chosen with the toggle, remembered per device (browser)
 
   const I18N = {
     en: {
       grid: 'Grid', inverter: 'Inverter', loads: 'AC loads', battery: 'Battery', dc: 'Solar DC', ac: 'Solar AC',
-      import: 'Import', export: 'Export', idle: 'Idle', output: 'Output', charging: 'Charging',
+      import: 'Import', export: 'Export', idle: 'Idle', output: 'AC out', charging: 'Charging',
       discharging: 'Discharging', today: 'Today', position: 'Position', voltage: 'Voltage', current: 'Current', detail: 'Detailed view', compact: 'Compact view',
       other: 'Other', balance: 'Balance today', selfsuff: 'Self-sufficiency', src_pv: 'PV', src_bat: 'Bat.', src_grid: 'Grid', peak: 'Peak today',
     },
     sk: {
       grid: 'Sieť', inverter: 'Menič', loads: 'Spotreba', battery: 'Batéria', dc: 'FV – DC', ac: 'FV – AC',
-      import: 'Odber', export: 'Dodávka', idle: 'Bez toku', output: 'Výstup', charging: 'Nabíja',
+      import: 'Odber', export: 'Dodávka', idle: 'Bez toku', output: 'AC výstup', charging: 'Nabíja',
       discharging: 'Vybíja', today: 'Dnes', position: 'Pozícia', voltage: 'Napätie', current: 'Prúd', detail: 'Detailné zobrazenie', compact: 'Kompaktné zobrazenie',
       other: 'Ostatné', balance: 'Bilancia dnes', selfsuff: 'Sebestačnosť', src_pv: 'FV', src_bat: 'Bat.', src_grid: 'Sieť', peak: 'Max dnes',
     },
